@@ -91,7 +91,12 @@ const FORBIDDEN_CONTENT = [
 function cleanNpmEnv() {
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
-		if (/^npm_(config|lifecycle|package)_/i.test(key) || key === "npm_command" || key === "npm_execpath" || key === "npm_node_execpath") {
+		if (
+			/^npm_(config|lifecycle|package)_/i.test(key) ||
+			key === "npm_command" ||
+			key === "npm_execpath" ||
+			key === "npm_node_execpath"
+		) {
 			delete env[key];
 		}
 	}
