@@ -8,14 +8,38 @@
 
 export class InvalidSourceError extends Error {}
 
+export interface SourceBounds {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 export interface ParsedSource {
-	type: "display" | "window";
+	type: "display" | "window" | "region";
 	sourceId: string;
 	displayId?: number;
 	windowId?: number;
+	/** `region` only: the rectangle in main-display points, top-left origin. */
+	bounds?: SourceBounds;
 }
 
 const WINDOW_SOURCE_PATTERN = /^window:(\d+)$/;
+/** `region:x,y,w,h` — integer points, top-left origin, on the main display (CR-LENSMITH-A010-7). */
+export const REGION_SOURCE_PATTERN = /^region:(\d+),(\d+),(\d+),(\d+)$/;
+
+function parseRegionBounds(raw: string): SourceBounds | undefined {
+	const match = REGION_SOURCE_PATTERN.exec(raw);
+	if (!match) return undefined;
+	const [x, y, width, height] = [match[1], match[2], match[3], match[4]].map(Number) as [
+		number,
+		number,
+		number,
+		number,
+	];
+	if (width === 0 || height === 0) return undefined;
+	return { x, y, width, height };
+}
 
 /**
  * Validates `--source`'s shape only (`"screen"` or `"window:<numeric-id>"`) — pure argument
@@ -27,17 +51,32 @@ const WINDOW_SOURCE_PATTERN = /^window:(\d+)$/;
 export function assertValidSourceSyntax(raw: string): void {
 	if (raw === "screen") return;
 	if (WINDOW_SOURCE_PATTERN.test(raw)) return;
+	if (parseRegionBounds(raw)) return;
 	throw new InvalidSourceError(
-		`Invalid --source "${raw}". Expected "screen" or "window:<numeric-window-id>".`,
+		`Invalid --source "${raw}". Expected "screen", "window:<numeric-window-id>" or "region:x,y,w,h".`,
 	);
 }
 
-/** `--source screen` targets the main display; `--source window:<id>` a specific window. */
+/**
+ * `--source screen` targets the main display; `--source window:<id>` a specific window;
+ * `--source region:x,y,w,h` a rectangle of the main display (menu bar, popovers and every
+ * window inside it included).
+ */
 export function parseSourceFlag(raw: string, mainDisplayId: number): ParsedSource {
 	assertValidSourceSyntax(raw);
 
 	if (raw === "screen") {
 		return { type: "display", sourceId: `display:${mainDisplayId}`, displayId: mainDisplayId };
+	}
+
+	const bounds = parseRegionBounds(raw);
+	if (bounds) {
+		return {
+			type: "region",
+			sourceId: `region:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`,
+			displayId: mainDisplayId,
+			bounds,
+		};
 	}
 
 	const match = WINDOW_SOURCE_PATTERN.exec(raw);
@@ -75,10 +114,11 @@ export interface BuildRecordingRequestOptions {
 export interface RecordingRequest {
 	schemaVersion: number;
 	source: {
-		type: "display" | "window";
+		type: "display" | "window" | "region";
 		sourceId: string;
 		displayId?: number;
 		windowId?: number;
+		bounds?: SourceBounds;
 	};
 	video: {
 		fps: number;
@@ -109,6 +149,7 @@ export function buildRecordingRequest(options: BuildRecordingRequestOptions): Re
 			sourceId: source.sourceId,
 			...(source.displayId !== undefined ? { displayId: source.displayId } : {}),
 			...(source.windowId !== undefined ? { windowId: source.windowId } : {}),
+			...(source.bounds !== undefined ? { bounds: { ...source.bounds } } : {}),
 		},
 		video: {
 			fps: options.fps,

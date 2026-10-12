@@ -124,6 +124,8 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let filter: SCContentFilter
 		let width: Int
 		let height: Int
+		/// `region` only: the captured rectangle in display-local points (CR-LENSMITH-A010-7).
+		var sourceRect: CGRect? = nil
 	}
 
 	private let request: RecordingRequest
@@ -144,6 +146,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var nativeMicrophoneEnabled = false
 	private var outputWidth = 1920
 	private var outputHeight = 1080
+	private var outputSourceRect: CGRect?
 	private let microphoneOutputTypeRawValue = 2
 	private let hostClock = CMClockGetHostTimeClock()
 
@@ -161,6 +164,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let target = try makeCaptureTarget(from: content)
 		outputWidth = target.width
 		outputHeight = target.height
+		outputSourceRect = target.sourceRect
 		let configuration = makeStreamConfiguration()
 		let stream = SCStream(filter: target.filter, configuration: configuration, delegate: self)
 
@@ -376,6 +380,34 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				width: clampCaptureDimension(width, fallback: request.video.width),
 				height: clampCaptureDimension(height, fallback: request.video.height)
 			)
+		case "region":
+			// CR-LENSMITH-A010-7: a rectangle of one display — a display filter cropped with
+			// `sourceRect`, so menus, popovers, the menu bar and several windows all show.
+			guard let displayId = request.source.displayId else {
+				throw HelperError.sourceNotFound("Region capture requires source.displayId.")
+			}
+			guard let bounds = request.source.bounds else {
+				throw HelperError.sourceNotFound("Region capture requires source.bounds.")
+			}
+			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
+				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
+			}
+			let region = CGRect(x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height)
+			let displayRect = CGRect(origin: .zero, size: display.frame.size)
+			guard region.width > 0, region.height > 0, displayRect.contains(region) else {
+				throw HelperError.sourceNotFound(
+					"Region \(Int(bounds.x)),\(Int(bounds.y)),\(Int(bounds.width)),\(Int(bounds.height)) is outside display \(displayId) (\(Int(display.frame.width))x\(Int(display.frame.height)) points)."
+				)
+			}
+			let scaleFactor = Self.scaleFactor(for: display.displayID)
+			let width = Int(region.width) * scaleFactor
+			let height = Int(region.height) * scaleFactor
+			return CaptureTarget(
+				filter: SCContentFilter(display: display, excludingWindows: []),
+				width: clampCaptureDimension(width, fallback: request.video.width),
+				height: clampCaptureDimension(height, fallback: request.video.height),
+				sourceRect: region
+			)
 		default:
 			throw HelperError.invalidSourceType(request.source.type)
 		}
@@ -385,6 +417,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let configuration = SCStreamConfiguration()
 		configuration.width = outputWidth
 		configuration.height = outputHeight
+		if let outputSourceRect {
+			configuration.sourceRect = outputSourceRect
+		}
 		configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, request.video.fps)))
 		configuration.queueDepth = 6
 		configuration.showsCursor = !request.video.hideSystemCursor
