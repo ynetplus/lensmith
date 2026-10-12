@@ -102,7 +102,19 @@ Every command reads and writes only the local files named on its command line. T
 
 ## Install
 
-Requirements: macOS with the Xcode command line tools (`xcode-select --install`), Node.js 18 or newer, a Playwright Chromium for `process` and `gif`. `caption` also needs `ffmpeg` (built with libass) and WhisperX on `PATH`; `package` needs `ffmpeg`.
+Requirements: macOS, Node.js 18 or newer. `narrate` needs `uv`; burned captions need `ffmpeg` built with libass, and `caption` also needs WhisperX on `PATH`; `package` needs `ffmpeg`. The Playwright Chromium is for `process` and `gif`.
+
+```bash
+npm install -g lensmith
+npx playwright install chromium
+lensmith doctor
+```
+
+To drive a real web app and get a narrated film, install [Lensmith Director](https://github.com/ynetplus/lensmith-director) (`npm install -g lensmith-director`). Director brings the engine it needs, so `lensmith-director demo` works with that one install; to also have the `lensmith` command on your PATH, install both (`npm install -g lensmith-director lensmith`).
+
+### From source
+
+For contributors. This path needs the Xcode command line tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/ynetplus/lensmith.git
@@ -123,7 +135,7 @@ Planned and not shipped. None of it is in a release yet.
 
 - **Headless mode on Linux**: capture over the Chrome DevTools Protocol, no macOS, no real cursor, for containers and CI.
 - **Click ring**: a ripple on every click in the render.
-- **HyperFrames-ready export**, an npm package, and a Claude skill with `AGENTS.md` for calling agents.
+- **HyperFrames-ready export** and a Claude skill with `AGENTS.md` for calling agents.
 
 ## Safety
 
