@@ -25,13 +25,10 @@
 
 **Lensmith records a screen, works out where the cursor was busy, zooms in on it and renders a paced 1080p60 demo clip.** It is a command-line tool built to be driven by AI agents and scripts, not by a person with a mouse. Pair it with [Lensmith Director](https://github.com/ynetplus/lensmith-director) and an agent can hand over a URL and a step list, and get back a finished demo of a real web app.
 
-<!-- DEMO SLOT. Before the visibility flip, render a 20 to 30 s walkthrough of a public web app with
-     `lensmith-director demo` and `lensmith gif`, 1280x720, and commit it as .github/assets/demo.gif.
-     Until the file exists, keep this block commented out: GitHub shows a broken image otherwise.
 <p align="center">
-  <img alt="A demo rendered by Lensmith: the cursor moves, each click is zoomed and held" src=".github/assets/demo.gif" width="100%">
+  <img alt="A narrated demo film made by Lensmith: the real cursor walks a live website, each click is zoomed and held, and captions follow the voice" src=".github/assets/demo.gif" width="100%">
 </p>
--->
+<p align="center"><sub>Made by Lensmith from a URL and a list of goals. The film has a voice; this preview is the silent GIF of it.</sub></p>
 
 ## What an agent gets back
 
