@@ -209,4 +209,18 @@ describe("CursorTelemetryRecorder", () => {
 
 		expect(recorder.toTelemetryData().assets[0]?.scaleFactor).toBe(2);
 	});
+
+	it("BF-19: setBounds re-targets normalization to a new rectangle", () => {
+		const recorder = new CursorTelemetryRecorder(0, BOUNDS);
+		recorder.setBounds({ x: 100, y: 100, width: 200, height: 200 });
+		recorder.recordPosition(200, 150);
+		recorder.recordShapeSample({
+			timestampMs: 5,
+			assetId: null,
+			leftButtonDown: false,
+			leftButtonPressed: false,
+			leftButtonReleased: false,
+		});
+		expect(recorder.toTelemetryData().samples[0]).toMatchObject({ cx: 0.5, cy: 0.25 });
+	});
 });

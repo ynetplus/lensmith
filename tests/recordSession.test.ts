@@ -59,7 +59,12 @@ function buildSpawn(): { spawnFn: (cmd: string, ...rest: unknown[]) => FakeChild
 	return { spawnFn, children };
 }
 
-function buildScenario(): Scenario {
+function buildScenario(windowFrame?: {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}): Scenario {
 	const { spawnFn: rawSpawn, children } = buildSpawn();
 	let resolveSckReady!: (child: FakeChild) => void;
 	const sckReady = new Promise<FakeChild>((resolve) => {
@@ -78,6 +83,7 @@ function buildScenario(): Scenario {
 					bounds: { x: 0, y: 0, width: 1000, height: 500 },
 					pixelWidth: 1000,
 					pixelHeight: 500,
+					...(windowFrame ? { windowFrame } : {}),
 				}),
 			);
 		}
@@ -206,6 +212,48 @@ describe("runRecord", () => {
 
 		expect(scenario.getChild("positionHelperPath").killed).toBe(true);
 		expect(scenario.getChild("cursorHelperPath").killed).toBe(true);
+	});
+
+	it("BF-19: a window source normalizes cursor samples to the window frame, not the display", async () => {
+		const scenario = buildScenario({ x: 0, y: 30, width: 1600, height: 900 });
+		const runPromise = runRecord(
+			{ source: "window:42", fps: 30, mic: false, systemAudio: false, out: outPath },
+			{
+				spawnFn: scenario.spawnFn,
+				resolvePaths: () => FAKE_PATHS,
+				startTimeMs: 0,
+				stopSignal: "SIGUSR2",
+				log: () => undefined,
+				errorLog: () => undefined,
+			},
+		);
+		await scenario.sckReady;
+		const sample = (timestampMs: number) =>
+			scenario.getChild("cursorHelperPath").emitLine({
+				type: "sample",
+				timestampMs,
+				assetId: null,
+				leftButtonDown: false,
+				leftButtonPressed: false,
+				leftButtonReleased: false,
+			});
+		const position = scenario.getChild("positionHelperPath");
+		position.emitLine({ type: "sample", timestampMs: 1, x: 1262, y: 524 });
+		sample(10);
+		// Outside the window (below it) for 3 consecutive samples -> not visible.
+		position.emitLine({ type: "sample", timestampMs: 11, x: 1262, y: 1500 });
+		sample(20);
+		sample(30);
+		sample(40);
+		await Promise.resolve();
+		process.emit("SIGUSR2" as NodeJS.Signals, "SIGUSR2" as NodeJS.Signals);
+		expect(await runPromise).toBe(0);
+
+		const samples = JSON.parse(readFileSync(`${outPath}.cursor.json`, "utf8")).samples;
+		expect(samples[0].cx).toBeCloseTo(1262 / 1600, 3);
+		expect(samples[0].cy).toBeCloseTo((524 - 30) / 900, 3);
+		expect(samples[0].visible).toBe(true);
+		expect(samples[3]).toMatchObject({ cy: 1, visible: false });
 	});
 
 	it("does not print a success line when the helper reports a failed finalize before closing (BF-6 round 2)", async () => {

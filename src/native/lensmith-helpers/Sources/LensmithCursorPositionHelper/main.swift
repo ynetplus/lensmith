@@ -16,6 +16,22 @@ import Foundation
 
 struct PositionHelperRequest: Decodable {
 	let sampleIntervalMs: Int?
+	/// BF-19: when set, the helper also reports this window's frame (global points, same
+	/// top-left-origin space as the cursor location) so cursor samples can be normalized to
+	/// the window instead of the display.
+	let windowId: UInt32?
+}
+
+/// BF-19: the on-screen frame of `windowId` in global points, or nil when not found.
+func windowFrame(_ windowId: UInt32) -> [String: Double]? {
+	guard
+		let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowId))
+			as? [[String: Any]],
+		let info = list.first,
+		let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+		let rect = CGRect(dictionaryRepresentation: boundsDict)
+	else { return nil }
+	return ["x": rect.origin.x, "y": rect.origin.y, "width": rect.width, "height": rect.height]
 }
 
 func emit(_ fields: [String: Any]) {
@@ -38,7 +54,7 @@ if CommandLine.arguments.count >= 2,
 {
 	request = decoded
 } else {
-	request = PositionHelperRequest(sampleIntervalMs: nil)
+	request = PositionHelperRequest(sampleIntervalMs: nil, windowId: nil)
 }
 
 // Sampled faster than the cursor-shape helper's own default (33ms) so a
@@ -56,7 +72,8 @@ let bounds = CGDisplayBounds(mainDisplayId)
 let displayMode = CGDisplayCopyDisplayMode(mainDisplayId)
 let pixelWidth = displayMode?.pixelWidth ?? CGDisplayPixelsWide(mainDisplayId)
 let pixelHeight = displayMode?.pixelHeight ?? CGDisplayPixelsHigh(mainDisplayId)
-emit([
+var lastWindowFrame: [String: Double]? = request.windowId.flatMap { windowFrame($0) }
+var readyFields: [String: Any] = [
 	"type": "ready",
 	"timestampMs": timestampMs(),
 	"displayId": mainDisplayId,
@@ -70,10 +87,21 @@ emit([
 	"pixelHeight": pixelHeight,
 	"pointWidth": CGDisplayPixelsWide(mainDisplayId),
 	"pointHeight": CGDisplayPixelsHigh(mainDisplayId),
-])
+]
+if let frame = lastWindowFrame { readyFields["windowFrame"] = frame }
+emit(readyFields)
+var loopCount = 0
 
 while true {
 	autoreleasepool {
+		// BF-19: re-read the window frame about every 250ms; report only a change.
+		loopCount += 1
+		if let windowId = request.windowId, loopCount % max(1, 250 / intervalMs) == 0,
+			let frame = windowFrame(windowId), frame != lastWindowFrame
+		{
+			lastWindowFrame = frame
+			emit(["type": "windowFrame", "timestampMs": timestampMs(), "frame": frame])
+		}
 		if let event = CGEvent(source: nil) {
 			let location = event.location
 			emit([
