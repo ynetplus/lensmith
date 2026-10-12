@@ -47,8 +47,13 @@ recorded session.
 
 ## Network
 
-Lensmith makes no network calls of its own. It has no telemetry, no update check and no
-upload. Rendering (`process`, `gif`) launches a local headless Chromium through
+Lensmith has no telemetry, no update check and no upload. The only command that uses the
+network on its own is `narrate`. With the default Kokoro engine, `uv` installs the Python
+packages and the Kokoro voice model downloads once from Hugging Face on first use; the
+English language model (a spaCy wheel) comes from the explosion/spacy-models releases on
+GitHub. After that it runs offline. With `--engine edge`, `uv` installs the `edge-tts`
+package and each narration line's text is sent to Microsoft's online Read Aloud service.
+Rendering (`process`, `gif`) launches a local headless Chromium through
 Playwright. That page is served from memory under a placeholder origin
 (`https://lensmith.harness`); every request to it is intercepted by Playwright and
 answered from local files, so nothing leaves the machine and no port is opened.
