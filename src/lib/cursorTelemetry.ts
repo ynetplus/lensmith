@@ -108,12 +108,17 @@ export class CursorTelemetryRecorder {
 
 	constructor(
 		private readonly startTimeMs: number,
-		private readonly bounds: DisplayBounds,
+		private bounds: DisplayBounds,
 		/** Fallback for `CursorAsset.scaleFactor` on the rare event the helper's own payload
 		 *  omits it — mirrors upstream's `screen.getDisplayNearestPoint(cursor).scaleFactor`
 		 *  fallback, computed here from the position helper's own pixel/point dimensions. */
 		private readonly fallbackScaleFactor: number = 1,
 	) {}
+
+	/** BF-19: replace the normalization rectangle (window source: the window's frame). */
+	setBounds(bounds: DisplayBounds): void {
+		this.bounds = bounds;
+	}
 
 	recordPosition(x: number, y: number): void {
 		this.latestPosition = { x, y };

@@ -141,15 +141,24 @@ export async function runRecord(
 		return 1;
 	}
 
-	const positionChild = spawnFn(positionHelperPath, [JSON.stringify({ sampleIntervalMs: 16 })], {
-		stdio: ["ignore", "pipe", "pipe"],
-	}) as ChildNoStdin;
+	const windowMatch = /^window:(\d+)$/.exec(options.source);
+	const positionChild = spawnFn(
+		positionHelperPath,
+		[
+			JSON.stringify({
+				sampleIntervalMs: 16,
+				...(windowMatch ? { windowId: Number(windowMatch[1]) } : {}),
+			}),
+		],
+		{ stdio: ["ignore", "pipe", "pipe"] },
+	) as ChildNoStdin;
 
 	let positionReady: {
 		displayId: number;
 		bounds: { x: number; y: number; width: number; height: number };
 		pixelWidth: number;
 		pixelHeight: number;
+		windowFrame?: { x: number; y: number; width: number; height: number };
 	};
 	try {
 		positionReady = await waitForReady(
@@ -163,6 +172,9 @@ export async function runRecord(
 					bounds: e.bounds as { x: number; y: number; width: number; height: number },
 					pixelWidth: e.pixelWidth as number,
 					pixelHeight: e.pixelHeight as number,
+					windowFrame: e.windowFrame as
+						| { x: number; y: number; width: number; height: number }
+						| undefined,
 				};
 			},
 			readyTimeoutMs,
@@ -196,15 +208,23 @@ export async function runRecord(
 	// cursorTelemetry.ts). The helper always includes its own scaleFactor in practice, so
 	// this is a defensive parity fallback, not the primary source.
 	const displayScaleFactor = positionReady.pixelWidth / Math.max(1, positionReady.bounds.width);
+	if (windowMatch && !positionReady.windowFrame) {
+		errorLog(
+			`[lensmith] Warning: no frame reported for window ${windowMatch[1]}; cursor positions fall back to display bounds.`,
+		);
+	}
 	const telemetry = new CursorTelemetryRecorder(
 		startTimeMs,
-		positionReady.bounds,
+		// BF-19: a window source's video is the window only, so normalize to its frame.
+		windowMatch && positionReady.windowFrame ? positionReady.windowFrame : positionReady.bounds,
 		displayScaleFactor,
 	);
 	readNdjson(positionChild.stdout, (event) => {
 		const e = event as Record<string, unknown>;
 		if (e?.type === "sample" && typeof e.x === "number" && typeof e.y === "number") {
 			telemetry.recordPosition(e.x, e.y);
+		} else if (e?.type === "windowFrame" && e.frame && windowMatch) {
+			telemetry.setBounds(e.frame as { x: number; y: number; width: number; height: number });
 		}
 	});
 
