@@ -21,7 +21,7 @@
 		"url": "https://github.com/ynetplus/lensmith/issues"
 	},
 	"bin": {
-		"lensmith": "./dist/cli.js"
+		"lensmith": "dist/cli.js"
 	},
 	"files": [
 		"dist/",

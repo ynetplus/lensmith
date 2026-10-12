@@ -4,6 +4,7 @@
 // not carry. Runs as the last step of `prepublishOnly`, and by hand: `npm run pack:check`.
 //
 //   node scripts/pack-check.mjs              check the file list, modes, contents and size
+//   node scripts/pack-check.mjs --self-test  prove the bin check rejects a stripped/invalid bin
 //   node scripts/pack-check.mjs --universal  also require every native helper in bin/ to be a
 //                                            universal (arm64 + x86_64) Mach-O binary
 //
@@ -12,12 +13,14 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const universal = process.argv.includes("--universal");
+const selfTest = process.argv.includes("--self-test");
 
 // Size budget. Measured at 0.1.0: 1.86 MB packed, 6.45 MB unpacked, 33 files; the largest
 // file is the 3.2 MB web-demuxer wasm, then the 2.1 MB harness bundle. The budget leaves headroom for normal growth but catches an
@@ -95,6 +98,65 @@ function packList() {
 	return info;
 }
 
+// BF-20: npm publish drops a bin path that starts with "./" ("script name ... was invalid and
+// removed") while `npm pack` keeps it, so the packed manifest must hold the bare form, and it
+// must name a file that is in the tarball. Returns a list of problems (empty = fine).
+function binProblems(manifest, filePaths) {
+	const target = manifest?.bin?.lensmith;
+	if (typeof target !== "string" || target === "") {
+		return ["packed package.json has no bin.lensmith (npm publish would ship no command)"];
+	}
+	if (target.startsWith("./")) {
+		return [
+			`bin.lensmith is "${target}": npm publish strips a leading "./" and drops the command; use "${target.replace(/^(\.\/)+/, "")}"`,
+		];
+	}
+	if (!filePaths.has(target)) return [`bin.lensmith "${target}" is not a file in the tarball`];
+	return [];
+}
+
+// Packs for real into a temp dir (scripts ignored, nothing published) and reads the manifest
+// out of the tarball, i.e. exactly what an install would see.
+function packedManifest() {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lensmith-packcheck-"));
+	try {
+		const packed = spawnSync(
+			"npm",
+			["pack", "--json", "--ignore-scripts", "--pack-destination", dir],
+			{ cwd: root, encoding: "utf8" },
+		);
+		if (packed.status !== 0) throw new Error(`npm pack failed (exit ${packed.status})`);
+		const [{ filename }] = JSON.parse(packed.stdout);
+		const read = spawnSync("tar", ["-xOf", path.join(dir, filename), "package/package.json"], {
+			encoding: "utf8",
+		});
+		if (read.status !== 0) throw new Error("could not read package/package.json from the tarball");
+		return JSON.parse(read.stdout);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+if (selfTest) {
+	const present = new Set(["dist/cli.js"]);
+	const cases = [
+		["bin with leading ./", { bin: { lensmith: "./dist/cli.js" } }, true],
+		["bin missing", { name: "lensmith" }, true],
+		["bin names a file not in the tarball", { bin: { lensmith: "dist/nope.js" } }, true],
+		["bare bin path", { bin: { lensmith: "dist/cli.js" } }, false],
+	];
+	let bad = 0;
+	for (const [label, manifest, shouldFail] of cases) {
+		const problems = binProblems(manifest, present);
+		const ok = shouldFail ? problems.length > 0 : problems.length === 0;
+		console.log(
+			`self-test ${ok ? "ok  " : "FAIL"} ${label}${problems[0] ? ` -> ${problems[0]}` : ""}`,
+		);
+		if (!ok) bad++;
+	}
+	process.exit(bad === 0 ? 0 : 1);
+}
+
 function mb(bytes) {
 	return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
@@ -109,6 +171,8 @@ for (const required of REQUIRED) {
 if (![...files.keys()].some((p) => /^dist\/harness\/wallpapers\/.+\.jpe?g$/.test(p))) {
 	failures.push("missing required file: dist/harness/wallpapers/*.jpg");
 }
+
+failures.push(...binProblems(packedManifest(), new Set(files.keys())));
 
 for (const name of NATIVE_HELPERS) {
 	const entry = files.get(`bin/${name}`);
