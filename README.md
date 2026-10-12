@@ -64,7 +64,7 @@ lensmith gif --project demo.openscreen --raw demo.mp4 \
 lensmith package --in final.mp4 --out-dir dist --profile embed
 ```
 
-Every command reads and writes only the local files named on its command line. There is no daemon, no server and no network call.
+Every command reads and writes only the local files named on its command line. There is no daemon and no server. The one command that touches the network is `narrate`, see [Safety](#safety).
 
 **To drive a real web app from a URL**, use [Lensmith Director](https://github.com/ynetplus/lensmith-director): the agent writes a step list (`url`, then `click`, `type` and `wait` steps) and runs `lensmith-director demo --steps steps.json --out-dir out`. The director moves the real macOS cursor, records through this engine and renders `out/final.mp4`.
 
@@ -73,7 +73,7 @@ Every command reads and writes only the local files named on its command line. T
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/pipeline-dark.svg">
-    <img alt="record, drive, zoom, render, and narrate (coming)" src=".github/assets/pipeline-light.svg" width="100%">
+    <img alt="record, drive, zoom, render, and narrate" src=".github/assets/pipeline-light.svg" width="100%">
   </picture>
 </p>
 
@@ -81,7 +81,7 @@ Every command reads and writes only the local files named on its command line. T
 2. **Drive** (with Director). The real cursor moves along an eased path to each element and clicks it; every click lands in the action log and becomes a zoom region.
 3. **Zoom.** Regions come from the clicks, or, for a human recording, from where the cursor dwelt (`suggest-zooms`).
 4. **Render.** A headless Chromium hosts OpenScreen's PixiJS and WebCodecs exporter and writes the final MP4 or GIF. On macOS it renders on the GPU (Metal) by default and prints `lensmith: render GPU: <renderer>` when it does; set `LENSMITH_RENDER_GPU=0` to force software rendering.
-5. **Narrate.** In progress: one narration line per step, local text to speech, with the pacing following the voice.
+5. **Narrate.** One narration line per step (`lensmith narrate`). Kokoro is the default voice: local and free, with its voice model downloaded once on first use. Edge TTS is optional. Word timings put each click on the word it belongs to, and `voiceover` mixes the voice into the film and burns the captions.
 
 ## Commands
 
@@ -93,6 +93,7 @@ Every command reads and writes only the local files named on its command line. T
 | `lensmith process` | Render and export a project to a final MP4. `--project`, `--raw`, `--cursor`, `--cursor-shapes arrow\|native` (default `arrow`: the film always draws the arrow; `native` keeps the recorded hand and text cursors), `--out` |
 | `lensmith gif` | Export a GIF from a project. Same flags as `process` |
 | `lensmith caption` | Generate word-level captions via WhisperX and burn them in with ffmpeg. `--in`, `--out`, `--no-burn-in`, `--srt-out` |
+| `lensmith narrate` | Synthesize narration lines to audio plus `timings.json` (word times, `[[mark]]` times, caption cues). `--script <json>`, `--out <dir>`, `--engine kokoro\|edge` (default `kokoro`, local; `edge` is online), `--voice <id>` (default `am_michael` for kokoro, `en-US-AndrewNeural` for edge), `--json`. Needs `uv` for the Python TTS helper |
 | `lensmith voiceover` | Mix narration lines into a rendered film at given start times and burn captions from the script. `--video`, `--narration`, `--starts`, `--out`, `--captions burn\|srt\|none`, `--srt-out`, `--json` |
 | `lensmith package` | Package a rendered MP4 into an embed-ready variant plus a poster frame. `--in`, `--out-dir`, `--profile hero\|embed\|social` |
 | `lensmith doctor` | Check whether this machine is ready to record. Read-only, never prompts. `--json`. Exit 0 ready, 2 not |
@@ -120,14 +121,13 @@ The first `record` asks macOS for Screen Recording permission (and Accessibility
 
 Planned and not shipped. None of it is in a release yet.
 
-- **Narration**: a `say` line per step, local text to speech, pacing that follows the voice.
 - **Headless mode on Linux**: capture over the Chrome DevTools Protocol, no macOS, no real cursor, for containers and CI.
 - **Click ring**: a ripple on every click in the render.
 - **HyperFrames-ready export**, an npm package, and a Claude skill with `AGENTS.md` for calling agents.
 
 ## Safety
 
-Lensmith records whatever is on screen. Passwords and personal data visible during a recording end up in the video; review before sharing. It asks for the macOS permissions it needs, makes no network calls of its own, has no telemetry and no update check. What each command accesses, and how to report a vulnerability, is in [SECURITY.md](./SECURITY.md).
+Lensmith records whatever is on screen. Passwords and personal data visible during a recording end up in the video; review before sharing. It asks for the macOS permissions it needs, has no telemetry and no update check. Its network use is limited to `narrate`: with the default Kokoro engine, `uv` installs the Python packages and the voice model downloads once from Hugging Face on first use (the English language model, a spaCy wheel, comes from GitHub), and after that it runs offline; with `--engine edge`, each narration line's text is sent to Microsoft's online Read Aloud service. Everything else stays on your machine. What each command accesses, and how to report a vulnerability, is in [SECURITY.md](./SECURITY.md).
 
 ## Built on OpenScreen
 
