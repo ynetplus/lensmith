@@ -1,0 +1,116 @@
+name: ci
+
+# CI gate for Lensmith. Four gates: secrets-detection · lint (biome) ·
+# test (vitest, against the built CLI) · repo-clean. No Alembic/migration
+# step — N/A, no DB (documented Phase-3 genesis skip, see PRJ-LENSMITH-A001).
+#
+# build-and-test moved to macos-latest in CR-LENSMITH-A001-2 (native
+# ScreenCaptureKit/cursor Swift helpers — the genesis scaffold deliberately
+# deferred this cost call to the CR that actually needed it, see its own
+# prior comment here; macOS runners bill at a 10x minute multiplier). A real
+# permission-gated screen recording is NOT attempted here — GitHub-hosted
+# macOS runners can't be granted Screen Recording/Accessibility TCC access
+# headlessly, so `record`'s orchestration/merge logic is covered by mocked
+# unit tests (tests/recordSession.test.ts) instead; the real on-machine E2E
+# capture is forge/proof evidence in the CR report, not a CI assertion.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + lint + test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright's Chromium + Linux system deps
+        # CR-LENSMITH-A001-4: the process/gif render harness needs a real
+        # Chromium binary AND the OS libraries it links against at runtime
+        # (GTK/NSS/ALSA/etc.) — `--with-deps` installs both via apt on
+        # ubuntu-latest. Without this, `chromium.launch()` fails outright
+        # (missing binary) rather than degrading gracefully, so it must run
+        # before the test step, not be discovered by a failure inside it.
+        run: npx playwright install --with-deps chromium
+
+      - name: Lint (biome)
+        run: npm run lint
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Build native macOS helpers (swift build)
+        run: npm run build:native:mac
+
+      - name: Test (vitest, against dist/ + bin/)
+        # Includes tests/render.test.ts — a REAL headless-Chromium render
+        # against a trimmed real fixture (CR-LENSMITH-A001-4), not mocked.
+        # This is the CR's own Acceptance Metric #4 ("CI will need the same
+        # headless-GPU handling as local — if it works locally but not in
+        # CI, that's a real, reportable finding"): software WebGL + WebCodecs
+        # under ubuntu-latest's default (no real GPU) environment is
+        # confirmed working locally on macOS headless Chromium without any
+        # extra launch flags (see the forge report), but Linux CI is a
+        # DIFFERENT headless-GPU environment and is only proven once this
+        # workflow actually goes green on GitHub's runners. build-and-test
+        # runs on macos-latest (native ScreenCaptureKit/cursor Swift
+        # helpers, CR-LENSMITH-A001-2) so the "Install Playwright's Chromium
+        # + Linux system deps" step above is a no-op there (--with-deps only
+        # applies apt-based OS libs on Linux); Playwright's Chromium binary
+        # itself still installs and is what this step actually needs on macOS.
+        run: npm test
+
+      - name: Repo-clean (no stray build artifacts committed by the steps above)
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)" || { echo "::error::working tree not clean after build steps"; git status; exit 1; }
+
+  secrets-scan:
+    name: detect-secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install detect-secrets
+        run: pip install "detect-secrets==1.5.0"
+
+      - name: Scan against baseline
+        run: |
+          # Re-scan against the committed baseline, then fail ONLY if the
+          # actual findings (`results`) changed — i.e. a NEW secret appeared.
+          # `detect-secrets scan` always rewrites `generated_at` (and may bump
+          # `version`/`plugins_used`), so a whole-file `git diff` is a
+          # guaranteed false positive; compare the findings instead.
+          cp .secrets.baseline /tmp/secrets-before.json
+          detect-secrets scan --baseline .secrets.baseline
+          python - <<'PY'
+          import json, sys
+          before = json.load(open("/tmp/secrets-before.json")).get("results", {})
+          after = json.load(open(".secrets.baseline")).get("results", {})
+          if before != after:
+              print("::error::detect-secrets found NEW secrets not in the baseline — "
+                    "review, then run `detect-secrets scan --baseline .secrets.baseline` locally to update.")
+              sys.exit(1)
+          print("detect-secrets: no new secrets (baseline findings unchanged).")
+          PY

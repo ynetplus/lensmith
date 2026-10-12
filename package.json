@@ -1,0 +1,48 @@
+{
+	"name": "lensmith",
+	"version": "0.1.0",
+	"description": "Lensmith — a scriptable CLI for AI agents: record the screen, detect auto-zoom regions and render polished demo/tutorial video, GIF and web-embed output.",
+	"private": true,
+	"type": "module",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ynetplus/lensmith.git"
+	},
+	"homepage": "https://github.com/ynetplus/lensmith#readme",
+	"bugs": {
+		"url": "https://github.com/ynetplus/lensmith/issues"
+	},
+	"bin": {
+		"lensmith": "./dist/cli.js"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"scripts": {
+		"build": "tsc && node scripts/build-harness.mjs",
+		"build:native:mac": "node scripts/build-native-mac.mjs",
+		"test": "vitest run",
+		"lint": "biome check .",
+		"prepublishOnly": "npm run build"
+	},
+	"dependencies": {
+		"commander": "^12.1.0",
+		"gif.js": "^0.2.0",
+		"mediabunny": "^1.40.1",
+		"motion": "^12.38.0",
+		"mp4box": "^2.3.0",
+		"pixi-filters": "^6.1.5",
+		"pixi.js": "^8.18.1",
+		"playwright": "^1.59.1",
+		"web-demuxer": "^4.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.8",
+		"@types/gif.js": "^0.2.5",
+		"@types/node": "^20.14.0",
+		"esbuild": "^0.27.0",
+		"typescript": "^5.5.4",
+		"vitest": "^4.1.10"
+	}
+}

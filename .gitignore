@@ -1,0 +1,25 @@
+## Node
+node_modules/
+dist/
+npm-debug.log*
+*.tsbuildinfo
+
+## Native build artifacts (CR-LENSMITH-A001-2) — CI/operators build fresh via
+## `npm run build:native:mac`; never commit compiled Swift binaries.
+bin/
+src/native/**/.build/
+
+## Env / secrets
+.env
+.env.*
+!.env.example
+
+## OS
+.DS_Store
+
+## Editor
+.vscode/
+.idea/
+
+## Coverage
+coverage/
