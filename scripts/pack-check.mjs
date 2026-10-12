@@ -85,10 +85,24 @@ const FORBIDDEN_CONTENT = [
 	[/~\/Work\//, "workspace path"],
 ];
 
+// BF-21: when this runs inside `npm publish` (prepublishOnly), nested npm calls inherit the
+// parent's npm_config_* env (dry-run, auth-type, ...) and misbehave. Strip npm's own variables
+// so the nested npm acts exactly as it does when run by hand; PATH, HOME etc. are kept.
+function cleanNpmEnv() {
+	const env = { ...process.env };
+	for (const key of Object.keys(env)) {
+		if (/^npm_(config|lifecycle|package)_/i.test(key) || key === "npm_command" || key === "npm_execpath" || key === "npm_node_execpath") {
+			delete env[key];
+		}
+	}
+	return env;
+}
+
 function packList() {
 	const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
 		cwd: root,
 		encoding: "utf8",
+		env: cleanNpmEnv(),
 	});
 	if (result.status !== 0) {
 		console.error(result.stderr || result.stdout);
@@ -123,7 +137,7 @@ function packedManifest() {
 		const packed = spawnSync(
 			"npm",
 			["pack", "--json", "--ignore-scripts", "--pack-destination", dir],
-			{ cwd: root, encoding: "utf8" },
+			{ cwd: root, encoding: "utf8", env: cleanNpmEnv() },
 		);
 		if (packed.status !== 0) throw new Error(`npm pack failed (exit ${packed.status})`);
 		const [{ filename }] = JSON.parse(packed.stdout);
