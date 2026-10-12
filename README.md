@@ -87,7 +87,7 @@ Every command reads and writes only the local files named on its command line. T
 
 | Command | Purpose |
 |---|---|
-| `lensmith record` | Record the screen with cursor telemetry (ScreenCaptureKit, macOS only). `--source screen` or `window:<id>`, `--fps`, `--mic`, `--system-audio`, `--out` |
+| `lensmith record` | Record the screen with cursor telemetry (ScreenCaptureKit, macOS only). `--source screen`, `window:<id>` or `region:x,y,w,h`, `--fps`, `--mic`, `--system-audio`, `--out` |
 | `lensmith suggest-zooms` | Suggest auto-zoom regions from cursor telemetry. `--cursor`, `--duration-ms`, `--default-duration-ms`, `--out` |
 | `lensmith compose` | Compose a zooms fragment and a raw recording into a project file for `process`. `--zooms`, `--raw`, `--out`, `--aspect`, `--quality medium\|good\|source`, `--padding`, `--wallpaper`, `--border-radius`, `--shadow-intensity` |
 | `lensmith process` | Render and export a project to a final MP4. `--project`, `--raw`, `--cursor`, `--cursor-shapes arrow\|native` (default `arrow`: the film always draws the arrow; `native` keeps the recorded hand and text cursors), `--out` |

@@ -43,7 +43,7 @@ export function registerRecordCommand(program: Command): void {
 	program
 		.command("record")
 		.description("Record the screen with cursor telemetry (ScreenCaptureKit, macOS only)")
-		.option("--source <source>", "screen or window:<id>", parseSource, "screen")
+		.option("--source <source>", "screen, window:<id> or region:x,y,w,h", parseSource, "screen")
 		.option("--fps <n>", "frames per second", parseFps, 60)
 		.option("--mic", "capture microphone audio", false)
 		.option("--system-audio", "capture system audio", false)

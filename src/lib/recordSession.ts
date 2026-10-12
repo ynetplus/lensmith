@@ -14,6 +14,7 @@ import {
 	captureCeiling,
 	InvalidSourceError,
 	parseSourceFlag,
+	REGION_SOURCE_PATTERN,
 } from "./recordingRequest.js";
 import { deriveCursorJsonPath, deriveSessionJsonPath } from "./recordPaths.js";
 
@@ -142,6 +143,9 @@ export async function runRecord(
 	}
 
 	const windowMatch = /^window:(\d+)$/.exec(options.source);
+	// CR-LENSMITH-A010-7: a region source records a rectangle of the main display, so the
+	// position helper tracks the display (no windowId) and telemetry normalises to the region.
+	const regionMatch = REGION_SOURCE_PATTERN.exec(options.source);
 	const positionChild = spawnFn(
 		positionHelperPath,
 		[
@@ -213,10 +217,22 @@ export async function runRecord(
 			`[lensmith] Warning: no frame reported for window ${windowMatch[1]}; cursor positions fall back to display bounds.`,
 		);
 	}
+	// Region bounds are main-display points; offset by the display origin so they share the
+	// position helper's global coordinate space (the main display's origin is 0,0 in practice).
+	const regionBounds = regionMatch
+		? {
+				x: positionReady.bounds.x + Number(regionMatch[1]),
+				y: positionReady.bounds.y + Number(regionMatch[2]),
+				width: Number(regionMatch[3]),
+				height: Number(regionMatch[4]),
+			}
+		: undefined;
 	const telemetry = new CursorTelemetryRecorder(
 		startTimeMs,
 		// BF-19: a window source's video is the window only, so normalize to its frame.
-		windowMatch && positionReady.windowFrame ? positionReady.windowFrame : positionReady.bounds,
+		// CR-LENSMITH-A010-7: a region source's video is the region only, so normalize to it.
+		regionBounds ??
+			(windowMatch && positionReady.windowFrame ? positionReady.windowFrame : positionReady.bounds),
 		displayScaleFactor,
 	);
 	readNdjson(positionChild.stdout, (event) => {

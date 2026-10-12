@@ -256,6 +256,46 @@ describe("runRecord", () => {
 		expect(samples[3]).toMatchObject({ cy: 1, visible: false });
 	});
 
+	it("CR-LENSMITH-A010-7: a region source normalizes cursor samples to the region", async () => {
+		const scenario = buildScenario();
+		const runPromise = runRecord(
+			{ source: "region:200,100,400,200", fps: 30, mic: false, systemAudio: false, out: outPath },
+			{
+				spawnFn: scenario.spawnFn,
+				resolvePaths: () => FAKE_PATHS,
+				startTimeMs: 0,
+				stopSignal: "SIGUSR2",
+				log: () => undefined,
+				errorLog: () => undefined,
+			},
+		);
+		await scenario.sckReady;
+		const sample = (timestampMs: number) =>
+			scenario.getChild("cursorHelperPath").emitLine({
+				type: "sample",
+				timestampMs,
+				assetId: null,
+				leftButtonDown: false,
+				leftButtonPressed: false,
+				leftButtonReleased: false,
+			});
+		const position = scenario.getChild("positionHelperPath");
+		// The region's top-left corner maps to (0, 0).
+		position.emitLine({ type: "sample", timestampMs: 1, x: 200, y: 100 });
+		sample(10);
+		position.emitLine({ type: "sample", timestampMs: 11, x: 400, y: 250 });
+		sample(20);
+		await Promise.resolve();
+		process.emit("SIGUSR2" as NodeJS.Signals, "SIGUSR2" as NodeJS.Signals);
+		expect(await runPromise).toBe(0);
+
+		const samples = JSON.parse(readFileSync(`${outPath}.cursor.json`, "utf8")).samples;
+		expect(samples[0].cx).toBeCloseTo(0, 3);
+		expect(samples[0].cy).toBeCloseTo(0, 3);
+		expect(samples[1].cx).toBeCloseTo(0.5, 3);
+		expect(samples[1].cy).toBeCloseTo(0.75, 3);
+	});
+
 	it("does not print a success line when the helper reports a failed finalize before closing (BF-6 round 2)", async () => {
 		// Round 1 made the SCK helper trap SIGINT so the clean-stop path always runs, but the
 		// helper still called exit(0) unconditionally regardless of whether AVAssetWriter actually

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	assertValidSourceSyntax,
 	buildRecordingRequest,
 	captureCeiling,
 	InvalidSourceError,
@@ -27,6 +28,76 @@ describe("parseSourceFlag", () => {
 
 	it("rejects an empty window id", () => {
 		expect(() => parseSourceFlag("window:", 1)).toThrow(InvalidSourceError);
+	});
+});
+
+// CR-LENSMITH-A010-7: `region:x,y,w,h` — a rectangle of the main display.
+describe("region source", () => {
+	const message = 'Expected "screen", "window:<numeric-window-id>" or "region:x,y,w,h".';
+
+	it('"region:x,y,w,h" resolves to a region source on the main display with bounds', () => {
+		expect(parseSourceFlag("region:800,150,1600,900", 3)).toEqual({
+			type: "region",
+			sourceId: "region:800,150,1600,900",
+			displayId: 3,
+			bounds: { x: 800, y: 150, width: 1600, height: 900 },
+		});
+	});
+
+	it("accepts a region at the display origin (menu bar included)", () => {
+		expect(() => assertValidSourceSyntax("region:0,0,1600,900")).not.toThrow();
+	});
+
+	it.each([
+		["zero width", "region:10,10,0,900"],
+		["zero height", "region:10,10,900,0"],
+		["a negative value", "region:-10,10,1600,900"],
+		["a missing field", "region:10,10,1600"],
+		["a float", "region:10.5,10,1600,900"],
+		["an empty region", "region:"],
+	])("refuses %s with the new message", (_label, raw) => {
+		expect(() => assertValidSourceSyntax(raw)).toThrow(InvalidSourceError);
+		expect(() => parseSourceFlag(raw, 1)).toThrow(message);
+	});
+
+	it("the invalid-source message names all three forms", () => {
+		expect(() => assertValidSourceSyntax("bogus")).toThrow(message);
+	});
+
+	it("buildRecordingRequest carries type region, displayId and bounds", () => {
+		const request = buildRecordingRequest({
+			source: parseSourceFlag("region:800,150,1600,900", 1),
+			fps: 60,
+			mic: false,
+			systemAudio: false,
+			screenPath: "/tmp/out.mp4",
+			fallbackWidth: 6016,
+			fallbackHeight: 3384,
+		});
+		expect(request.source).toEqual({
+			type: "region",
+			sourceId: "region:800,150,1600,900",
+			displayId: 1,
+			bounds: { x: 800, y: 150, width: 1600, height: 900 },
+		});
+		expect(request.source).not.toHaveProperty("windowId");
+	});
+
+	it("screen and window requests carry no bounds", () => {
+		const base = {
+			fps: 30,
+			mic: false,
+			systemAudio: false,
+			screenPath: "/tmp/out.mp4",
+			fallbackWidth: 800,
+			fallbackHeight: 600,
+		};
+		expect(
+			buildRecordingRequest({ ...base, source: parseSourceFlag("screen", 1) }).source,
+		).not.toHaveProperty("bounds");
+		expect(
+			buildRecordingRequest({ ...base, source: parseSourceFlag("window:7", 1) }).source,
+		).not.toHaveProperty("bounds");
 	});
 });
 
