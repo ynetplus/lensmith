@@ -2,7 +2,14 @@
 	"name": "lensmith",
 	"version": "0.1.0",
 	"description": "Lensmith — a scriptable CLI for AI agents: record the screen, detect auto-zoom regions and render polished demo/tutorial video, GIF and web-embed output.",
-	"private": true,
+	"keywords": [
+		"ai-agents",
+		"cli",
+		"demo-video",
+		"macos",
+		"playwright",
+		"screen-recording"
+	],
 	"type": "module",
 	"license": "Apache-2.0",
 	"repository": {
@@ -16,15 +23,30 @@
 	"bin": {
 		"lensmith": "./dist/cli.js"
 	},
+	"files": [
+		"dist/",
+		"bin/",
+		"scripts/narrate.py",
+		"LICENSE",
+		"NOTICE.md",
+		"README.md"
+	],
 	"engines": {
 		"node": ">=18"
+	},
+	"os": [
+		"darwin"
+	],
+	"publishConfig": {
+		"access": "public"
 	},
 	"scripts": {
 		"build": "tsc && node scripts/build-harness.mjs",
 		"build:native:mac": "node scripts/build-native-mac.mjs",
 		"test": "vitest run",
 		"lint": "biome check .",
-		"prepublishOnly": "npm run build"
+		"pack:check": "node scripts/pack-check.mjs",
+		"prepublishOnly": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build && npm run build:native:mac -- --universal && npm run pack:check -- --universal"
 	},
 	"dependencies": {
 		"commander": "^12.1.0",
