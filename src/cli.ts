@@ -2,6 +2,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import { registerBookendCommand } from "./commands/bookend.js";
 import { registerCaptionCommand } from "./commands/caption.js";
 import { registerComposeCommand } from "./commands/compose.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
@@ -36,6 +37,7 @@ export function buildProgram(): Command {
 	registerNarrateCommand(program);
 	registerVoiceoverCommand(program);
 	registerGifCommand(program);
+	registerBookendCommand(program);
 	registerPackageCommand(program);
 	registerDoctorCommand(program);
 
