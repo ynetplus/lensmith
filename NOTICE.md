@@ -87,6 +87,14 @@ Two vendored files are **modified** from upstream commit
 
 These are the "Settle" pacing values (provisional until locked after review).
 
+### BF-24 — Hold the last frame to the stop time (modified vendored file)
+
+- `src/native/screencapturekit/Sources/OpenScreenScreenCaptureKitHelper/main.swift` — the
+  last appended video frame is retained and, on stop, appended once more at the stop time when
+  it is older than one frame interval (ScreenCaptureKit sends no frames while the screen is
+  static), so the film's duration equals the recorded span; the `recording-stopped` event
+  gains `durationMs`. Every change is marked inline with `LENSMITH:`.
+
 OpenScreen is licensed under the MIT License:
 
 ```
