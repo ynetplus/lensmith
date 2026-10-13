@@ -185,9 +185,11 @@ export function formatSrt(cues: CaptionCue[]): string {
  * an SRT in a 384x288 script space scaled to the video height, so the same
  * constant serves every frame size (at 1080p one unit is 3.75 px).
  * `BorderStyle=4` draws a box behind each line with `Outline` as its padding.
+ * `Bold=500` is a numeric weight to libass (any value above 1 is), which is
+ * how it selects the Medium face; the font name alone resolves Regular.
  */
 export const CAPTION_STYLE =
-	"FontName=Helvetica Neue,FontSize=15,Bold=0,PrimaryColour=&H00FFFFFF,BackColour=&H4216100E,OutlineColour=&H4216100E,BorderStyle=4,Outline=4,Shadow=0,Alignment=2,MarginV=17,MarginL=54,MarginR=54,WrapStyle=0";
+	"FontName=Helvetica Neue,FontSize=15,Bold=500,PrimaryColour=&H00FFFFFF,BackColour=&H4216100E,OutlineColour=&H4216100E,BorderStyle=4,Outline=4,Shadow=0,Alignment=2,MarginV=17,MarginL=54,MarginR=54,WrapStyle=0";
 
 /** Escapes a filesystem path for safe use inside ffmpeg's `subtitles=` filter argument. */
 export function escapeForFfmpegSubtitlesFilter(filePath: string): string {

@@ -248,6 +248,7 @@ describe("CAPTION_STYLE", () => {
 		expect(CAPTION_STYLE).not.toMatch(/BorderStyle=1\b/);
 		expect(CAPTION_STYLE).toContain("Shadow=0");
 		expect(CAPTION_STYLE).toContain("FontName=Helvetica Neue");
+		expect(CAPTION_STYLE).toContain("Bold=500");
 	});
 });
 
