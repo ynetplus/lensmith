@@ -188,11 +188,13 @@ export function formatSrt(cues: CaptionCue[]): string {
  * libass still strokes the glyph outline in that mode, so `OutlineColour` is
  * fully transparent (alpha FF) and `MarginV` includes the padding (bar bottom
  * 64 px above the frame bottom at 1080p).
+ * libass fits a font's ascent+descent to `FontSize`, so 18 units give a
+ * ~40 px cap height at 1080p.
  * `Bold=500` is a numeric weight to libass (any value above 1 is), which is
  * how it selects the Medium face; the font name alone resolves Regular.
  */
 export const CAPTION_STYLE =
-	"FontName=Helvetica Neue,FontSize=15,Bold=500,PrimaryColour=&H00FFFFFF,BackColour=&H4216100E,OutlineColour=&HFF16100E,BorderStyle=4,Outline=4,Shadow=0,Alignment=2,MarginV=21,MarginL=54,MarginR=54,WrapStyle=0";
+	"FontName=Helvetica Neue,FontSize=18,Bold=500,PrimaryColour=&H00FFFFFF,BackColour=&H4216100E,OutlineColour=&HFF16100E,BorderStyle=4,Outline=4,Shadow=0,Alignment=2,MarginV=21,MarginL=54,MarginR=54,WrapStyle=0";
 
 /** Escapes a filesystem path for safe use inside ffmpeg's `subtitles=` filter argument. */
 export function escapeForFfmpegSubtitlesFilter(filePath: string): string {
