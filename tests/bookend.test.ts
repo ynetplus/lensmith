@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildBookendPage,
 	CURVES,
+	canvasFor,
 	cubicBezier,
 	DEFAULT_HOOK_VOICE_MS,
 	END_CARD_COPY,
@@ -9,6 +10,7 @@ import {
 	frameCount,
 	frameState,
 	parseFormat,
+	parseGround,
 	planBookend,
 } from "../src/lib/bookend.js";
 
@@ -153,5 +155,78 @@ describe("helpers", () => {
 		expect(html).toContain(END_CARD_COPY.address);
 		expect(html).toContain('<svg class="lockup"');
 		expect(html).not.toMatch(/[‒-―]/);
+	});
+});
+
+describe("canvasFor (BF-22)", () => {
+	it("16:9 keeps the input size and the film fills the canvas", () => {
+		const c = canvasFor("16:9", { width: 1920, height: 1080 });
+		expect([c.width, c.height]).toEqual([1920, 1080]);
+		expect(c.tile).toEqual({ x: 0, y: 0, w: 1920, h: 1080 });
+		expect(canvasFor("16:9", { width: 1280, height: 720 }).tile).toEqual({
+			x: 0,
+			y: 0,
+			w: 1280,
+			h: 720,
+		});
+	});
+
+	it("9:16 is 1080x1920 whatever the input size, film tile 1080 wide and centred", () => {
+		for (const input of [
+			{ width: 1920, height: 1080 },
+			{ width: 1280, height: 720 },
+			{ width: 3840, height: 2160 },
+		]) {
+			const c = canvasFor("9:16", input);
+			expect([c.width, c.height]).toEqual([1080, 1920]);
+			expect(c.tile).toEqual({ x: 0, y: 656, w: 1080, h: 608 });
+		}
+	});
+
+	it("9:16 tile height follows the input aspect, even, centred", () => {
+		const c = canvasFor("9:16", { width: 1440, height: 1080 });
+		expect(c.tile).toEqual({ x: 0, y: 555, w: 1080, h: 810 });
+		expect(c.tile.y * 2 + c.tile.h).toBe(1920);
+		expect(canvasFor("9:16", { width: 1080, height: 1920 }).tile).toEqual({
+			x: 0,
+			y: 0,
+			w: 1080,
+			h: 1920,
+		});
+	});
+
+	it("9:16 fits a film taller than the frame by height", () => {
+		const c = canvasFor("9:16", { width: 1000, height: 2000 });
+		expect(c.tile).toEqual({ x: 60, y: 0, w: 960, h: 1920 });
+	});
+
+	it("ground paper by default (ink type), iron on request (paper type)", () => {
+		expect(canvasFor("9:16", { width: 1920, height: 1080 })).toMatchObject({
+			ground: "#F4F3EF",
+			fg: "#1A1D21",
+		});
+		expect(canvasFor("9:16", { width: 1920, height: 1080 }, "iron")).toMatchObject({
+			ground: "#121417",
+			fg: "#F4F3EF",
+		});
+		expect(parseGround(undefined)).toBe("paper");
+		expect(() => parseGround("blue")).toThrow(/paper or iron/);
+	});
+
+	it("the 9:16 page draws the film in its tile on the ground", () => {
+		const plan = planBookend({ hookWords: 3, format: "9:16" });
+		const canvas = canvasFor("9:16", { width: 1920, height: 1080 });
+		const html = buildBookendPage({
+			plan,
+			width: canvas.width,
+			height: canvas.height,
+			canvas,
+			fontDataUrl: "data:font/ttf;base64,AAAA",
+			lockupSvg: '<svg viewBox="0 0 1 1"></svg>',
+			hookText: "Hook",
+		});
+		expect(html).toContain(".bg{left:0px;top:656px;width:1080px;height:608px}");
+		expect(html).toContain("transform:scale(1)");
+		expect(html).toContain("--fg:#1A1D21");
 	});
 });
