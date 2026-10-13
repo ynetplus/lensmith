@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CAPTION_STYLE } from "../src/commands/caption.js";
 import { buildVoiceoverCues, runVoiceover, type VoiceoverDeps } from "../src/commands/voiceover.js";
 
 const dirs: string[] = [];
@@ -82,6 +83,13 @@ describe("voiceover", () => {
 		const args = t.mix()?.args ?? [];
 		expect(args[args.indexOf("-vf") + 1]).toContain("subtitles=");
 		expect(args).toContain("libx264");
+	});
+
+	it("burn mode uses the shared CAPTION_STYLE", () => {
+		const t = setup({ l1: 1000, l2: 6000 });
+		runVoiceover(t.opts, t.deps);
+		const args = t.mix()?.args ?? [];
+		expect(args[args.indexOf("-vf") + 1]).toContain(`force_style='${CAPTION_STYLE}'`);
 	});
 
 	it("copies the video stream with --captions none and srt", () => {

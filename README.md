@@ -81,7 +81,7 @@ Every command reads and writes only the local files named on its command line. T
 2. **Drive** (with Director). The real cursor moves along an eased path to each element and clicks it; every click lands in the action log and becomes a zoom region.
 3. **Zoom.** Regions come from the clicks, or, for a human recording, from where the cursor dwelt (`suggest-zooms`).
 4. **Render.** A headless Chromium hosts OpenScreen's PixiJS and WebCodecs exporter and writes the final MP4 or GIF. On macOS it renders on the GPU (Metal) by default and prints `lensmith: render GPU: <renderer>` when it does; set `LENSMITH_RENDER_GPU=0` to force software rendering.
-5. **Narrate.** One narration line per step (`lensmith narrate`). Kokoro is the default voice: local and free, with its voice model downloaded once on first use. Edge TTS is optional. Word timings put each click on the word it belongs to, and `voiceover` mixes the voice into the film and burns the captions.
+5. **Narrate.** One narration line per step (`lensmith narrate`). Kokoro is the default voice: local and free, with its voice model downloaded once on first use. Edge TTS is optional. Word timings put each click on the word it belongs to, and `voiceover` mixes the voice into the film and burns the captions. Burned captions (from `voiceover` and `caption`) share one look: white medium-weight Helvetica Neue on a translucent dark bar, no outline, centred in the bottom safe zone.
 
 ## Commands
 
