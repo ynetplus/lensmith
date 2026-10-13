@@ -249,6 +249,8 @@ describe("CAPTION_STYLE", () => {
 		expect(CAPTION_STYLE).toContain("Shadow=0");
 		expect(CAPTION_STYLE).toContain("FontName=Helvetica Neue");
 		expect(CAPTION_STYLE).toContain("Bold=500");
+		// the glyph stroke is invisible: OutlineColour alpha is FF
+		expect(CAPTION_STYLE).toMatch(/OutlineColour=&HFF[0-9A-F]{6}/);
 	});
 });
 
