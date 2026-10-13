@@ -254,6 +254,68 @@ const PAPER = "#F4F3EF";
 const IRON = "#121417";
 const INK = "#1A1D21";
 
+/** The 9:16 frame's ground, per post (Carbon "Bookend" cards): paper or iron. */
+export type Ground = "paper" | "iron";
+
+export interface Rect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/** The output canvas and where the film sits in it. */
+export interface Canvas {
+	width: number;
+	height: number;
+	/** The film's tile: the whole canvas in 16:9, a centred 1080-wide tile in 9:16. */
+	tile: Rect;
+	/** Ground colour around the tile (9:16) and the colour of the type drawn on it. */
+	ground: string;
+	fg: string;
+}
+
+export function parseGround(value: string | undefined): Ground {
+	if (value === undefined || value === "paper") return "paper";
+	if (value === "iron") return "iron";
+	throw new Error(`--ground must be paper or iron (got '${value}')`);
+}
+
+const even = (n: number) => 2 * Math.round(n / 2);
+
+/**
+ * The output canvas (BF-22). `16:9` keeps the input size and the film fills it. `9:16` is
+ * always 1080x1920: the film whole in a 1080-wide tile, height from the input's aspect (even,
+ * as ffmpeg's `scale=1080:-2`), centred, on the ground; a film taller than the frame is fitted
+ * by height instead.
+ */
+export function canvasFor(
+	format: BookendFormat,
+	input: { width: number; height: number },
+	ground: Ground = "paper",
+): Canvas {
+	const fg = ground === "iron" ? PAPER : INK;
+	const bg = ground === "iron" ? IRON : PAPER;
+	if (format === "16:9") {
+		return {
+			width: input.width,
+			height: input.height,
+			tile: { x: 0, y: 0, w: input.width, h: input.height },
+			ground: bg,
+			fg,
+		};
+	}
+	const W = TYPE["9:16"].width;
+	const H = TYPE["9:16"].height;
+	let w = W;
+	let h = even((W * input.height) / input.width);
+	if (h > H) {
+		h = H;
+		w = even((H * input.width) / input.height);
+	}
+	return { width: W, height: H, tile: { x: (W - w) / 2, y: (H - h) / 2, w, h }, ground: bg, fg };
+}
+
 function escapeHtml(s: string): string {
 	return s
 		.replace(/&/g, "&amp;")
@@ -264,9 +326,11 @@ function escapeHtml(s: string): string {
 
 export interface PageInput {
 	plan: BookendPlan;
-	/** Render size (the input film's size). The card spec is drawn at 1920 or 1080 wide and scaled. */
+	/** Render size (the output canvas). The card spec is drawn at 1920 or 1080 wide and scaled. */
 	width: number;
 	height: number;
+	/** 9:16 only: the film tile and the ground (`canvasFor`). */
+	canvas?: Canvas;
 	fontDataUrl: string;
 	lockupSvg: string;
 	hookText?: string;
@@ -291,6 +355,13 @@ export function buildBookendPage(p: PageInput): string {
 .install{margin-top:${ty.install.gapAbove}px}`
 		: `.ttl-slot{position:absolute;left:${ty.title.left}px;width:928px;bottom:${ty.height - (ty.title.bottom ?? 0)}px}
 .lines{position:absolute;left:${ty.title.left}px;width:928px;top:${ty.install.top ?? 0}px}`;
+	const c = p.canvas ?? canvasFor(p.plan.format, { width: ty.width, height: ty.height });
+	const tileCss = wide
+		? ""
+		: `html,body{background:${c.ground}}
+.canvas{background:${c.ground};--fg:${c.fg}}
+.bg{left:${c.tile.x}px;top:${c.tile.y}px;width:${c.tile.w}px;height:${c.tile.h}px}
+`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @font-face{font-family:"Bricolage Grotesque";font-weight:200 800;src:url(${p.fontDataUrl}) format("truetype")}
 html,body{margin:0;background:${IRON};overflow:hidden}
@@ -308,7 +379,7 @@ ${hookCss}
 .install{font-weight:500;font-size:${ty.install.size}px;line-height:1.3}
 .url{font-weight:400;font-size:${ty.address.size}px;line-height:1.3;margin-top:${ty.address.gapAbove}px}
 ${endCss}
-</style></head><body>
+${tileCss}</style></head><body>
 <div class="canvas" id="cv">
 <img class="bg" id="bg" alt="">
 <div class="veil" id="veil"></div>
@@ -325,13 +396,6 @@ window.__bookend = {
     return new Promise(function (res) {
       var img = document.getElementById("bg");
       img.onload = function () {
-        if (${wide ? "false" : "true"}) {
-          var c = document.createElement("canvas"); c.width = 64; c.height = 64;
-          var x = c.getContext("2d"); x.drawImage(img, 0, img.naturalHeight * 0.13, img.naturalWidth, img.naturalHeight * 0.18, 0, 0, 64, 64);
-          var d = x.getImageData(0, 0, 64, 64).data, s = 0;
-          for (var i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-          document.getElementById("cv").style.setProperty("--fg", s / (d.length / 4) > 128 ? "${INK}" : "${PAPER}");
-        }
         res(true);
       };
       img.src = src;

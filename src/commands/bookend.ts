@@ -8,10 +8,12 @@ import { chromium } from "playwright";
 import {
 	type BookendPlan,
 	buildBookendPage,
+	canvasFor,
 	formatFromSize,
 	frameCount,
 	frameState,
 	parseFormat,
+	parseGround,
 	planBookend,
 } from "../lib/bookend.js";
 import { buildLaunchOptions } from "../lib/harnessRunner.js";
@@ -137,6 +139,7 @@ export interface BookendOptions {
 	hook?: string | boolean;
 	endCard?: boolean;
 	format?: string;
+	ground?: string;
 	hookVoice?: string;
 	endCardHold?: string;
 	json?: boolean;
@@ -150,6 +153,7 @@ export async function runBookend(opts: BookendOptions): Promise<Record<string, u
 	if (opts.hookVoice && !hookText) throw new BookendError("--hook-voice needs --hook <text>");
 	const input = probe(opts.in);
 	const format = parseFormat(opts.format) ?? formatFromSize(input.width, input.height);
+	const canvas = canvasFor(format, input, parseGround(opts.ground));
 	const voiceMs = opts.hookVoice ? probe2Audio(opts.hookVoice) : null;
 	const plan = planBookend({
 		hookWords: hookText ? hookText.split(/\s+/).length : null,
@@ -179,8 +183,9 @@ export async function runBookend(opts: BookendOptions): Promise<Record<string, u
 
 		const html = buildBookendPage({
 			plan,
-			width: input.width,
-			height: input.height,
+			width: canvas.width,
+			height: canvas.height,
+			canvas,
 			fontDataUrl: `data:font/ttf;base64,${readFileSync(assetPath("BricolageGrotesque.ttf")).toString("base64")}`,
 			lockupSvg: readFileSync(assetPath("lensmith-lockup.svg"), "utf8"),
 			hookText,
@@ -189,7 +194,7 @@ export async function runBookend(opts: BookendOptions): Promise<Record<string, u
 		let shots = 0;
 		try {
 			const page = await browser.newPage({
-				viewport: { width: input.width, height: input.height },
+				viewport: { width: canvas.width, height: canvas.height },
 			});
 			await page.setContent(html);
 			await page.evaluate("document.fonts.ready.then(() => true)");
@@ -237,9 +242,17 @@ export async function runBookend(opts: BookendOptions): Promise<Record<string, u
 		const voiceIdx = opts.hookVoice ? idx++ : -1;
 		if (opts.hookVoice) args.push("-i", opts.hookVoice);
 
+		// The body film is scaled into its tile and padded onto the ground (9:16); in 16:9 the
+		// tile is the whole canvas and the chain is the plain scale it always was.
+		const t = canvas.tile;
+		const fit =
+			format === "9:16"
+				? `scale=${t.w}:${t.h},pad=${canvas.width}:${canvas.height}:${t.x}:${t.y}:color=${canvas.ground}`
+				: `scale=${canvas.width}:${canvas.height}`;
+		const bodyAt = plan.open ? 1 : 0;
 		const norm = vIn.map(
 			(l, i) =>
-				`${l}fps=${input.fpsRaw},scale=${input.width}:${input.height},setsar=1,format=yuv420p[v${i}]`,
+				`${l}fps=${input.fpsRaw},${i === bodyAt ? fit : `scale=${canvas.width}:${canvas.height}`},setsar=1,format=yuv420p[v${i}]`,
 		);
 		const filters = [
 			...norm,
@@ -286,6 +299,9 @@ export async function runBookend(opts: BookendOptions): Promise<Record<string, u
 		return {
 			out: opts.out,
 			format,
+			width: canvas.width,
+			height: canvas.height,
+			tile: canvas.tile,
 			inputMs: input.durationMs,
 			openMs: Math.round(openMs),
 			endMs: Math.round(endMs),
@@ -322,6 +338,7 @@ export function registerBookendCommand(program: Command): void {
 		.option("--no-hook", "no opening card")
 		.option("--no-end-card", "no Made with Lensmith end card")
 		.option("--format <ratio>", "16:9 or 9:16 (default: from the input's aspect)")
+		.option("--ground <paper|iron>", "9:16 ground around the film tile", "paper")
 		.option(
 			"--hook-voice <wav>",
 			"spoken hook, mixed at 600 ms (without it the hook holds 2500 ms)",
