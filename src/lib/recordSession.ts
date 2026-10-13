@@ -44,6 +44,27 @@ export interface RecordSessionIO {
 	/** Resolves the 3 native helper binaries. Defaults to the real `bin/` lookup
 	 *  (nativeHelpers.ts) — overridable so tests don't depend on compiled binaries existing. */
 	resolvePaths?: () => HelperPaths;
+	/** Wall clock used to measure the recorded span (BF-24). Injectable for tests. */
+	now?: () => number;
+}
+
+/** BF-24: how far the written film may drift from the measured span before the CLI warns. */
+export const DURATION_MISMATCH_TOLERANCE_MS = 500;
+
+/**
+ * BF-24 tripwire: the helper's reported film duration against the span the session measured
+ * (recording start to the stop request). Returns the warning to print, or null when they agree
+ * within {@link DURATION_MISMATCH_TOLERANCE_MS}. A warning, never a failure.
+ */
+export function durationMismatchWarning(filmMs: number, spanMs: number): string | null {
+	if (Math.abs(filmMs - spanMs) <= DURATION_MISMATCH_TOLERANCE_MS) {
+		return null;
+	}
+	return (
+		`[lensmith] WARNING: the film is ${Math.round(filmMs)} ms long but the recording spanned ` +
+		`${Math.round(spanMs)} ms (off by ${Math.round(Math.abs(filmMs - spanMs))} ms). ` +
+		"Timing laid on this film (captions, narration, zooms) may not line up."
+	);
 }
 
 function resolveRealHelperPaths(): HelperPaths {
@@ -123,6 +144,7 @@ export async function runRecord(
 	const startTimeMs = io.startTimeMs ?? Date.now();
 	const stopSignal = io.stopSignal ?? "SIGINT";
 	const readyTimeoutMs = io.readyTimeoutMs ?? READY_TIMEOUT_MS;
+	const now = io.now ?? Date.now;
 
 	if (process.platform !== "darwin") {
 		errorLog(
@@ -293,6 +315,8 @@ export async function runRecord(
 	const outcome = await new Promise<"stopped" | "error">((resolve) => {
 		let settled = false;
 		let stopRequested = false;
+		let recordingStartedAtMs: number | null = null;
+		let stopRequestedAtMs: number | null = null;
 
 		const finish = (result: "stopped" | "error") => {
 			if (settled) return;
@@ -307,6 +331,7 @@ export async function runRecord(
 				return;
 			}
 			if (e?.event === "recording-started") {
+				recordingStartedAtMs = now();
 				log(
 					`[lensmith] Recording started (${e.width}x${e.height} @ ${options.fps}fps). ` +
 						"Press Ctrl+C to stop.",
@@ -324,6 +349,17 @@ export async function runRecord(
 			}
 			if (e?.event === "recording-stopped") {
 				log("[lensmith] Recording stopped.");
+				if (
+					typeof e.durationMs === "number" &&
+					recordingStartedAtMs !== null &&
+					stopRequestedAtMs !== null
+				) {
+					const warning = durationMismatchWarning(
+						e.durationMs,
+						stopRequestedAtMs - recordingStartedAtMs,
+					);
+					if (warning) errorLog(warning);
+				}
 				finish("stopped");
 			}
 		});
@@ -358,6 +394,7 @@ export async function runRecord(
 				return;
 			}
 			stopRequested = true;
+			stopRequestedAtMs = now();
 			log("[lensmith] Stopping recording...");
 			sckChild.stdin.write("stop\n");
 		};

@@ -149,6 +149,14 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var outputSourceRect: CGRect?
 	private let microphoneOutputTypeRawValue = 2
 	private let hostClock = CMClockGetHostTimeClock()
+	// LENSMITH: BF-24 — ScreenCaptureKit only delivers a frame when the content changes, so a
+	// static screen at the end of a recording left the file shorter than the recorded span. The
+	// last appended frame is retained (sampleQueue only) and held to the stop time in stop().
+	private var lastVideoPixelBuffer: CVPixelBuffer?
+	private var lastVideoFormat: CMFormatDescription?
+	private var lastVideoPresentationTime: CMTime?
+	private var sessionStartTime: CMTime?
+	private var stopPresentationTime: CMTime?
 
 	init(request: RecordingRequest) {
 		self.request = request
@@ -198,6 +206,10 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				return stopTask
 			}
 			isStopping = true
+			// LENSMITH: BF-24 — the stop time on the same (pause-retimed) clock as the frames.
+			let now = CMClockGetTime(hostClock)
+			let effectiveNow = isPaused ? (pauseStartedAt ?? now) : now
+			stopPresentationTime = CMTimeSubtract(effectiveNow, totalPausedDuration)
 			let task = Task { [weak self] () -> Bool in
 				guard let self else { return false }
 				do {
@@ -303,11 +315,19 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		if !didStartWriting {
 			writer.startWriting()
 			writer.startSession(atSourceTime: presentationTime)
+			sessionStartTime = presentationTime // LENSMITH: BF-24
 			didStartWriting = true
 		}
 
 		if videoInput.isReadyForMoreMediaData {
-			if videoInput.append(sampleBuffer), !didEmitRecordingStarted {
+			let appended = videoInput.append(sampleBuffer)
+			if appended {
+				// LENSMITH: BF-24 — remember the last frame so stop() can hold it to the stop time.
+				lastVideoPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+				lastVideoFormat = CMSampleBufferGetFormatDescription(sampleBuffer)
+				lastVideoPresentationTime = presentationTime
+			}
+			if appended, !didEmitRecordingStarted {
 				didEmitRecordingStarted = true
 				emit([
 					"event": "recording-started",
@@ -498,6 +518,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			return false
 		}
 
+		appendHeldFrameIfStale() // LENSMITH: BF-24
 		videoInput?.markAsFinished()
 		systemAudioInput?.markAsFinished()
 		microphoneAudioInput?.markAsFinished()
@@ -516,11 +537,87 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			return false
 		}
 
-		emit([
+		var stoppedEvent: [String: Any] = [
 			"event": "recording-stopped",
 			"screenPath": request.outputs.screenPath,
-		])
+		]
+		// LENSMITH: BF-24 — the written film's duration, so the CLI can compare it with the span.
+		if let durationMs = await writtenDurationMs() {
+			stoppedEvent["durationMs"] = durationMs
+		}
+		emit(stoppedEvent)
 		return true
+	}
+
+	/// LENSMITH: BF-24 — when the last appended frame is older than the stop time by more than one
+	/// frame interval (a static screen: ScreenCaptureKit sent nothing new), append it once more at
+	/// the stop time so the container's duration equals the recorded span. Variable-rate output is
+	/// otherwise unchanged.
+	private func appendHeldFrameIfStale() {
+		sampleQueue.sync {
+			guard didStartWriting,
+				let videoInput,
+				let pixelBuffer = lastVideoPixelBuffer,
+				let format = lastVideoFormat,
+				let lastTime = lastVideoPresentationTime,
+				let stopTime = stopPresentationTime
+			else {
+				return
+			}
+			let frameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, request.video.fps)))
+			guard CMTimeCompare(CMTimeSubtract(stopTime, lastTime), frameInterval) > 0 else {
+				return
+			}
+			var timing = CMSampleTimingInfo(
+				duration: frameInterval,
+				presentationTimeStamp: stopTime,
+				decodeTimeStamp: .invalid
+			)
+			var heldSample: CMSampleBuffer?
+			let status = CMSampleBufferCreateReadyWithImageBuffer(
+				allocator: kCFAllocatorDefault,
+				imageBuffer: pixelBuffer,
+				formatDescription: format,
+				sampleTiming: &timing,
+				sampleBufferOut: &heldSample
+			)
+			guard status == noErr, let heldSample else {
+				emit([
+					"event": "warning",
+					"code": "hold-frame-failed",
+					"message": "Unable to build the held last frame: \(status).",
+				])
+				return
+			}
+			var waits = 0
+			while !videoInput.isReadyForMoreMediaData, waits < 100 {
+				usleep(10_000)
+				waits += 1
+			}
+			if videoInput.isReadyForMoreMediaData, videoInput.append(heldSample) {
+				lastVideoPresentationTime = stopTime
+			} else {
+				emit([
+					"event": "warning",
+					"code": "hold-frame-failed",
+					"message": "The writer did not accept the held last frame.",
+				])
+			}
+		}
+	}
+
+	/// LENSMITH: BF-24 — read back from the finished file; falls back to the appended span.
+	private func writtenDurationMs() async -> Int? {
+		let asset = AVURLAsset(url: URL(fileURLWithPath: request.outputs.screenPath))
+		if let duration = try? await asset.load(.duration), duration.isValid, duration.seconds > 0 {
+			return Int((duration.seconds * 1000).rounded())
+		}
+		let span: CMTime? = sampleQueue.sync {
+			guard let start = sessionStartTime, let last = lastVideoPresentationTime else { return nil }
+			return CMTimeSubtract(last, start)
+		}
+		guard let span, span.isValid else { return nil }
+		return Int((span.seconds * 1000).rounded())
 	}
 
 	private func addAudioInput(to writer: AVAssetWriter, bitRate: Int) throws -> AVAssetWriterInput {

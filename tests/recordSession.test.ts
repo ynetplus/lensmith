@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runRecord } from "../src/lib/recordSession.js";
+import { durationMismatchWarning, runRecord } from "../src/lib/recordSession.js";
 
 // Fake native helper: a real child_process has stdout/stderr Readable streams,
 // a stdin Writable, EventEmitter-style error/exit events, and kill()/killed.
@@ -59,12 +59,15 @@ function buildSpawn(): { spawnFn: (cmd: string, ...rest: unknown[]) => FakeChild
 	return { spawnFn, children };
 }
 
-function buildScenario(windowFrame?: {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}): Scenario {
+function buildScenario(
+	windowFrame?: {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	},
+	stoppedDurationMs?: number,
+): Scenario {
 	const { spawnFn: rawSpawn, children } = buildSpawn();
 	let resolveSckReady!: (child: FakeChild) => void;
 	const sckReady = new Promise<FakeChild>((resolve) => {
@@ -97,7 +100,11 @@ function buildScenario(windowFrame?: {
 		if (cmd === FAKE_PATHS.sckHelperPath) {
 			child.stdin.on("data", (chunk: Buffer) => {
 				if (chunk.toString("utf8").trim() === "stop") {
-					child.emitLine({ event: "recording-stopped", screenPath: "/tmp/whatever.mp4" });
+					child.emitLine({
+						event: "recording-stopped",
+						screenPath: "/tmp/whatever.mp4",
+						...(stoppedDurationMs !== undefined ? { durationMs: stoppedDurationMs } : {}),
+					});
 				}
 			});
 			queueMicrotask(() => {
@@ -592,5 +599,62 @@ describe("runRecord", () => {
 
 		expect(exitCode).toBe(1);
 		expect(logs.some((line) => line.includes('Invalid --source "window:not-a-number"'))).toBe(true);
+	});
+});
+
+describe("BF-24: film duration against the recorded span", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(path.join(tmpdir(), "lensmith-record-duration-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("durationMismatchWarning names both numbers past 500 ms and stays quiet within it", () => {
+		const warning = durationMismatchWarning(38_400, 49_400);
+		expect(warning).toContain("38400 ms");
+		expect(warning).toContain("49400 ms");
+		expect(durationMismatchWarning(6_030, 6_000)).toBeNull();
+		expect(durationMismatchWarning(5_500, 6_000)).toBeNull();
+		expect(durationMismatchWarning(5_499, 6_000)).not.toBeNull();
+	});
+
+	async function runWithHelperDuration(durationMs: number): Promise<string[]> {
+		const scenario = buildScenario(undefined, durationMs);
+		const errors: string[] = [];
+		// The clock reads 10_000 at "recording-started" and 16_000 at the stop request: a 6 s span.
+		const clock = [10_000, 16_000];
+		const runPromise = runRecord(
+			{ source: "screen", fps: 30, mic: false, systemAudio: false, out: path.join(dir, "d.mp4") },
+			{
+				spawnFn: scenario.spawnFn,
+				resolvePaths: () => FAKE_PATHS,
+				stopSignal: "SIGUSR2",
+				now: () => clock.shift() ?? 99_999,
+				log: (m) => errors.push(m),
+				errorLog: (m) => errors.push(m),
+			},
+		);
+		await scenario.sckReady;
+		await Promise.resolve();
+		process.emit("SIGUSR2" as NodeJS.Signals, "SIGUSR2" as NodeJS.Signals);
+		expect(await runPromise).toBe(0);
+		return errors;
+	}
+
+	it("warns, naming both numbers, when the helper's film is shorter than the span", async () => {
+		const errors = await runWithHelperDuration(3_970);
+		const warnings = errors.filter((m) => m.includes("WARNING"));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("3970 ms");
+		expect(warnings[0]).toContain("6000 ms");
+	});
+
+	it("prints no warning when the helper's film matches the span", async () => {
+		const errors = await runWithHelperDuration(6_033);
+		expect(errors.filter((m) => m.includes("WARNING"))).toHaveLength(0);
 	});
 });
