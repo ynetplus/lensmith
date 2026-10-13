@@ -95,7 +95,17 @@ export interface Cue {
 	text: string;
 }
 
-export interface LineTimings {
+/**
+ * Where the voice sits inside a line's clip: first and last moment above -40 dBFS, in ms from
+ * the start of the file. The clip keeps its own leading/trailing silence (word times stay
+ * file-relative); a consumer that wants lines back to back schedules by these bounds.
+ */
+export interface SpeechBounds {
+	speechStartMs: number;
+	speechEndMs: number;
+}
+
+export interface LineTimings extends Partial<SpeechBounds> {
 	file: string;
 	durationMs: number;
 	marks: Record<string, number>;
@@ -107,7 +117,7 @@ export interface Timings {
 	lines: Record<string, LineTimings>;
 }
 
-interface CacheEntry {
+interface CacheEntry extends Partial<SpeechBounds> {
 	key: string;
 	file: string;
 	durationMs: number;
@@ -115,8 +125,11 @@ interface CacheEntry {
 }
 
 interface HelperResult {
-	lines: Record<string, { durationMs: number; words: Word[] }>;
+	lines: Record<string, Partial<SpeechBounds> & { durationMs: number; words: Word[] }>;
 }
+
+const hasBounds = (e: Partial<SpeechBounds>): e is SpeechBounds =>
+	e.speechStartMs !== undefined && e.speechEndMs !== undefined;
 
 export interface NarrateOptions {
 	script: string;
@@ -233,6 +246,21 @@ export function validateTimings(t: Timings): void {
 		if (!Number.isInteger(line.durationMs) || line.durationMs <= 0) {
 			throw new NarrateError(`${where}: durationMs must be a positive integer`);
 		}
+		if (line.speechStartMs !== undefined || line.speechEndMs !== undefined) {
+			const { speechStartMs: s, speechEndMs: e } = line;
+			if (
+				!Number.isInteger(s) ||
+				!Number.isInteger(e) ||
+				(s as number) < 0 ||
+				(s as number) >= (e as number) ||
+				(e as number) > line.durationMs
+			) {
+				throw new NarrateError(
+					`${where}: speechStartMs/speechEndMs must be integers with ` +
+						"0 <= speechStartMs < speechEndMs <= durationMs",
+				);
+			}
+		}
 		for (const [name, ms] of Object.entries(line.marks ?? {})) {
 			if (!Number.isFinite(ms) || ms < 0 || ms > line.durationMs) {
 				throw new NarrateError(`${where}: mark '${name}' (${ms} ms) is outside the line`);
@@ -348,8 +376,12 @@ export function runNarrate(opts: NarrateOptions, deps: NarrateDeps = realDeps): 
 			return existsSync(audio) && statSync(audio).size > 0;
 		};
 		const todo = lines.filter((l) => !fresh(l));
+		// Cache entries written before speech bounds existed: measure the clip, never re-synthesize.
+		const remeasure = lines.filter(
+			(l) => !todo.includes(l) && !hasBounds(cache[l.id] as CacheEntry),
+		);
 
-		if (todo.length > 0) {
+		if (todo.length > 0 || remeasure.length > 0) {
 			if (!uvAvailable(deps)) {
 				throw new NarrateError(
 					"uv not found on PATH. 'lensmith narrate' runs its Python TTS helper with uv. " +
@@ -357,33 +389,62 @@ export function runNarrate(opts: NarrateOptions, deps: NarrateDeps = realDeps): 
 						"then run this command again.",
 				);
 			}
-			const jobPath = path.join(outDir, ".narrate-job.json");
-			const resultPath = path.join(outDir, ".narrate-result.json");
-			rmSync(resultPath, { force: true });
-			writeFileSync(
-				jobPath,
-				JSON.stringify({
-					engine,
-					voice,
-					lines: todo.map((l) => ({ id: l.id, text: l.clean, file: path.join(outDir, l.file) })),
-				}),
-				"utf-8",
-			);
-			// The helper's stdout goes to our stderr so --json output stays clean.
-			const r = deps.spawnSync(
-				"uv",
-				["run", "--no-project", ...UV_PACKAGES[engine], deps.helperPath, jobPath, resultPath],
-				{ stdio: ["ignore", 2, 2] },
-			);
-			rmSync(jobPath, { force: true });
-			if (r.error) throw new NarrateError(`could not start uv: ${r.error.message}`);
-			if (r.status !== 0) throw helperFailure(engine, r.status);
-			const result = readJson<HelperResult>(resultPath);
-			rmSync(resultPath, { force: true });
-			for (const l of todo) {
-				const got = result?.lines?.[l.id];
-				if (!got) throw new NarrateError(`narration helper returned no result for line '${l.id}'`);
-				cache[l.id] = { key: l.key, file: l.file, durationMs: got.durationMs, words: got.words };
+			const runHelper = (job: object, uvArgs: string[]): HelperResult | undefined => {
+				const jobPath = path.join(outDir, ".narrate-job.json");
+				const resultPath = path.join(outDir, ".narrate-result.json");
+				rmSync(resultPath, { force: true });
+				writeFileSync(jobPath, JSON.stringify(job), "utf-8");
+				// The helper's stdout goes to our stderr so --json output stays clean.
+				const r = deps.spawnSync(
+					"uv",
+					["run", "--no-project", ...uvArgs, deps.helperPath, jobPath, resultPath],
+					{ stdio: ["ignore", 2, 2] },
+				);
+				rmSync(jobPath, { force: true });
+				if (r.error) throw new NarrateError(`could not start uv: ${r.error.message}`);
+				if (r.status !== 0) throw helperFailure(engine, r.status);
+				const result = readJson<HelperResult>(resultPath);
+				rmSync(resultPath, { force: true });
+				return result;
+			};
+			const bounds = (got: Partial<SpeechBounds>): Partial<SpeechBounds> =>
+				hasBounds(got) ? { speechStartMs: got.speechStartMs, speechEndMs: got.speechEndMs } : {};
+			if (todo.length > 0) {
+				const result = runHelper(
+					{
+						engine,
+						voice,
+						lines: todo.map((l) => ({ id: l.id, text: l.clean, file: path.join(outDir, l.file) })),
+					},
+					UV_PACKAGES[engine],
+				);
+				for (const l of todo) {
+					const got = result?.lines?.[l.id];
+					if (!got)
+						throw new NarrateError(`narration helper returned no result for line '${l.id}'`);
+					cache[l.id] = {
+						key: l.key,
+						file: l.file,
+						durationMs: got.durationMs,
+						...bounds(got),
+						words: got.words,
+					};
+				}
+			}
+			if (remeasure.length > 0) {
+				const result = runHelper(
+					{
+						measure: true,
+						lines: remeasure.map((l) => ({ id: l.id, file: path.join(outDir, l.file) })),
+					},
+					[],
+				);
+				for (const l of remeasure) {
+					const got = result?.lines?.[l.id];
+					if (!got)
+						throw new NarrateError(`narration helper returned no result for line '${l.id}'`);
+					cache[l.id] = { ...(cache[l.id] as CacheEntry), ...bounds(got) };
+				}
 			}
 			writeAtomic(cachePath, `${JSON.stringify({ lines: cache }, null, 1)}\n`);
 		}
@@ -394,6 +455,7 @@ export function runNarrate(opts: NarrateOptions, deps: NarrateDeps = realDeps): 
 			timings.lines[l.id] = {
 				file: l.file,
 				durationMs: c.durationMs,
+				...(hasBounds(c) ? { speechStartMs: c.speechStartMs, speechEndMs: c.speechEndMs } : {}),
 				marks: markTimes(l.clean, l.marks, c.words),
 				words: c.words,
 				cues: captionCues(l.clean, c.words),
@@ -415,6 +477,8 @@ export function runNarrate(opts: NarrateOptions, deps: NarrateDeps = realDeps): 
 						id: l.id,
 						file: path.join(outDir, l.file),
 						durationMs: timings.lines[l.id]?.durationMs,
+						speechStartMs: timings.lines[l.id]?.speechStartMs,
+						speechEndMs: timings.lines[l.id]?.speechEndMs,
 						cached: cachedIds.has(l.id),
 					})),
 				}),

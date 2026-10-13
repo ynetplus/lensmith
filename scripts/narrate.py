@@ -8,8 +8,16 @@ Run by `lensmith narrate` (src/commands/narrate.ts), never by hand:
 The job file is written by narrate.ts:
     {"engine": "kokoro"|"edge", "voice": "<id>", "lines": [{"id", "text", "file"}]}
 `text` is already clean (no [[mark]] tags) and `file` is the absolute audio path to write.
-The result file maps each line id to {"durationMs", "words": [{"text", "startMs", "endMs"}]}.
+The result file maps each line id to {"durationMs", "speechStartMs", "speechEndMs",
+"words": [{"text", "startMs", "endMs"}]}. speechStartMs / speechEndMs are the first and last
+moment the clip is louder than -40 dBFS: the voice inside the file's own leading and trailing
+silence. The audio file itself is never trimmed, so word times stay relative to the file.
 Mark times, caption cues and the cache are computed in narrate.ts from these words.
+
+A job with "measure": true and lines [{"id", "file"}] synthesizes nothing: it only measures
+the speech bounds of existing clips (cache entries written before the bounds existed).
+`narrate.py --bounds <clip>` prints one clip's bounds as JSON (WAV needs only Python's
+standard library; other formats are decoded with ffmpeg).
 
 Engines:
 - kokoro (default): local, Apache-2.0 (github.com/hexgrad/kokoro). Writes 24 kHz WAV. Word
@@ -58,6 +66,9 @@ from pathlib import Path
 
 KOKORO_RATE = 24000
 MISSING_PACKAGE_EXIT = 3
+SPEECH_DBFS = -40.0
+SPEECH_LEVEL = 10 ** (SPEECH_DBFS / 20)  # linear amplitude of -40 dBFS, full scale = 1.0
+DECODE_RATE = 24000
 
 
 def missing(package, err):
@@ -71,6 +82,69 @@ def is_word(text):
 
 def ms(seconds):
     return int(round(seconds * 1000))
+
+
+def speech_bounds(samples, rate):
+    """First and last sample above -40 dBFS, in ms: (speechStartMs, speechEndMs).
+
+    `samples` is mono, full scale = 1.0 (a numpy array or any sequence of floats). A clip with
+    no sample above the level (silence) reports the whole clip.
+    """
+    n = len(samples)
+    duration = ms(n / rate)
+    first = next((i for i in range(n) if abs(samples[i]) > SPEECH_LEVEL), None)
+    if first is None:
+        return 0, max(duration, 1)
+    last = next(i for i in range(n - 1, -1, -1) if abs(samples[i]) > SPEECH_LEVEL)
+    start = min(ms(first / rate), duration - 1)
+    end = max(start + 1, min(ms((last + 1) / rate), duration))
+    return start, end
+
+
+def read_samples(path):
+    """Decode a clip to mono floats (full scale 1.0) and its sample rate.
+
+    16-bit PCM WAV (what Kokoro writes) is read with the standard library; anything else
+    (Edge's MP3) is decoded by ffmpeg to 16-bit mono PCM.
+    """
+    import array
+
+    path = Path(path)
+    if path.suffix.lower() == ".wav":
+        import wave
+
+        with wave.open(str(path), "rb") as w:
+            if w.getsampwidth() == 2:
+                channels, rate = w.getnchannels(), w.getframerate()
+                pcm = array.array("h", w.readframes(w.getnframes()))
+                if sys.byteorder == "big":
+                    pcm.byteswap()
+                return [v / 32768.0 for v in pcm[::channels]], rate
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le", "-acodec", "pcm_s16le",
+         "-ac", "1", "-ar", str(DECODE_RATE), "-"],
+        capture_output=True, check=True)
+    pcm = array.array("h", r.stdout)
+    if sys.byteorder == "big":
+        pcm.byteswap()
+    return [v / 32768.0 for v in pcm], DECODE_RATE
+
+
+def file_bounds(path):
+    samples, rate = read_samples(path)
+    return speech_bounds(samples, rate)
+
+
+def bounds_fields(start, end):
+    return {"speechStartMs": start, "speechEndMs": end}
+
+
+def measure(lines):
+    out = {}
+    for line in lines:
+        out[line["id"]] = bounds_fields(*file_bounds(line["file"]))
+        print(f"lensmith-narrate: {line['id']}: speech bounds measured", file=sys.stderr)
+    return out
 
 
 def synth_kokoro(lines, voice):
@@ -101,7 +175,8 @@ def synth_kokoro(lines, voice):
             raise RuntimeError(f"Kokoro produced no audio for line {line['id']!r}")
         audio = np.concatenate(chunks)
         write_audio(line["file"], lambda p: sf.write(p, audio, KOKORO_RATE, format="WAV"))
-        out[line["id"]] = {"durationMs": ms(len(audio) / KOKORO_RATE), "words": words}
+        out[line["id"]] = {"durationMs": ms(len(audio) / KOKORO_RATE),
+                           **bounds_fields(*speech_bounds(audio, KOKORO_RATE)), "words": words}
         print(f"lensmith-narrate: {line['id']}: synthesized (kokoro)", file=sys.stderr)
     return out
 
@@ -134,9 +209,13 @@ def synth_edge(lines, voice):
         def write(path, line=line, holder=holder):
             holder["words"] = asyncio.run(one(line["text"], path))
             holder["durationMs"] = ms(duration(path))
+            holder["bounds"] = file_bounds(path)
 
         write_audio(line["file"], write)
+        start, end = holder["bounds"]
+        end = min(end, holder["durationMs"])  # decoded length can differ from ffprobe's by a frame
         out[line["id"]] = {"durationMs": holder["durationMs"],
+                           **bounds_fields(min(start, end - 1), end),
                            "words": [w for w in holder["words"] if is_word(w["text"])]}
         print(f"lensmith-narrate: {line['id']}: synthesized (edge)", file=sys.stderr)
     return out
@@ -167,6 +246,10 @@ def write_audio(final, writer):
 
 def main(job_path, result_path):
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+    if job.get("measure"):
+        out = measure(job["lines"])
+        Path(result_path).write_text(json.dumps({"lines": out}), encoding="utf-8")
+        return
     engine, voice, lines = job["engine"], job["voice"], job["lines"]
     if engine == "kokoro":
         out = synth_kokoro(lines, voice)
@@ -178,8 +261,11 @@ def main(job_path, result_path):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--bounds":
+        print(json.dumps(bounds_fields(*file_bounds(sys.argv[2]))))
+        sys.exit(0)
     if len(sys.argv) != 3:
-        print("usage: narrate.py <job.json> <result.json>", file=sys.stderr)
+        print("usage: narrate.py <job.json> <result.json> | --bounds <clip>", file=sys.stderr)
         sys.exit(2)
     try:
         main(sys.argv[1], sys.argv[2])
