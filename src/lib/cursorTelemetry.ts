@@ -101,19 +101,48 @@ const OUTSIDE_HIDE_THRESHOLD = 3;
 
 export class CursorTelemetryRecorder {
 	private samples: CursorSample[] = [];
+	/** BF-28: each sample's raw epoch, kept so {@link setZero} can re-base samples already taken. */
+	private sampleEpochs: number[] = [];
+	/** BF-28: the epoch `timeMs` counts from — the constructor's `startTimeMs` until
+	 *  {@link setZero} moves it to the first video frame. */
+	private zeroMs: number;
 	private assets = new Map<string, CursorAsset>();
 	private latestPosition: { x: number; y: number } | null = null;
 	private previousLeftButtonDown = false;
 	private consecutiveOutsideSamples = 0;
 
 	constructor(
-		private readonly startTimeMs: number,
+		startTimeMs: number,
 		private bounds: DisplayBounds,
 		/** Fallback for `CursorAsset.scaleFactor` on the rare event the helper's own payload
 		 *  omits it — mirrors upstream's `screen.getDisplayNearestPoint(cursor).scaleFactor`
 		 *  fallback, computed here from the position helper's own pixel/point dimensions. */
 		private readonly fallbackScaleFactor: number = 1,
-	) {}
+	) {
+		this.zeroMs = startTimeMs;
+	}
+
+	/**
+	 * BF-28: zero the telemetry at `epochMs` (the first appended video frame) so `timeMs`
+	 * shares the video's own time base. Samples already recorded are re-based to the new
+	 * zero; any that land before it are dropped. Returns how many were dropped.
+	 */
+	setZero(epochMs: number): number {
+		this.zeroMs = epochMs;
+		const keptSamples: CursorSample[] = [];
+		const keptEpochs: number[] = [];
+		this.samples.forEach((sample, index) => {
+			const epoch = this.sampleEpochs[index] as number;
+			const timeMs = epoch - epochMs;
+			if (timeMs < 0) return;
+			keptSamples.push({ ...sample, timeMs });
+			keptEpochs.push(epoch);
+		});
+		const dropped = this.samples.length - keptSamples.length;
+		this.samples = keptSamples;
+		this.sampleEpochs = keptEpochs;
+		return dropped;
+	}
 
 	/** BF-19: replace the normalization rectangle (window source: the window's frame). */
 	setBounds(bounds: DisplayBounds): void {
@@ -165,8 +194,9 @@ export class CursorTelemetryRecorder {
 					: "move";
 		this.previousLeftButtonDown = event.leftButtonDown;
 
+		this.sampleEpochs.push(event.timestampMs);
 		this.samples.push({
-			timeMs: Math.max(0, event.timestampMs - this.startTimeMs),
+			timeMs: Math.max(0, event.timestampMs - this.zeroMs),
 			cx: clamp(normalizedX, 0, 1),
 			cy: clamp(normalizedY, 0, 1),
 			visible,

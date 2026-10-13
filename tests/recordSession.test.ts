@@ -67,6 +67,8 @@ function buildScenario(
 		height: number;
 	},
 	stoppedDurationMs?: number,
+	/** BF-28: the fake helper's `recording-started.timestampMs` (the first frame's epoch). */
+	startedAtMs?: number,
 ): Scenario {
 	const { spawnFn: rawSpawn, children } = buildSpawn();
 	let resolveSckReady!: (child: FakeChild) => void;
@@ -111,7 +113,7 @@ function buildScenario(
 				child.emitLine({ event: "ready", schemaVersion: 1 });
 				child.emitLine({
 					event: "recording-started",
-					timestampMs: Date.now(),
+					timestampMs: startedAtMs ?? Date.now(),
 					width: 1000,
 					height: 500,
 				});
@@ -148,7 +150,7 @@ describe("runRecord", () => {
 	});
 
 	it("writes <out>.cursor.json and <out-base>.session.json on a clean SIGINT stop", async () => {
-		const scenario = buildScenario();
+		const scenario = buildScenario(undefined, undefined, 1_000);
 		const logs: string[] = [];
 
 		const runPromise = runRecord(
@@ -214,6 +216,7 @@ describe("runRecord", () => {
 		expect(sessionJson).toEqual({
 			screenVideoPath: outPath,
 			createdAt: 1_000,
+			firstFrameAt: 1_000,
 			cursorCaptureMode: "editable-overlay",
 		});
 
@@ -221,8 +224,56 @@ describe("runRecord", () => {
 		expect(scenario.getChild("cursorHelperPath").killed).toBe(true);
 	});
 
+	it("BF-28: zeroes telemetry at the first frame and prints its epoch on the ready line", async () => {
+		// The first frame lands 180 ms after the session's own start time.
+		const scenario = buildScenario(undefined, undefined, 10_180);
+		const logs: string[] = [];
+		const runPromise = runRecord(
+			{ source: "screen", fps: 30, mic: false, systemAudio: false, out: outPath },
+			{
+				spawnFn: scenario.spawnFn,
+				resolvePaths: () => FAKE_PATHS,
+				startTimeMs: 10_000,
+				stopSignal: "SIGUSR2",
+				log: (m) => logs.push(m),
+				errorLog: (m) => logs.push(m),
+			},
+		);
+
+		await scenario.sckReady;
+		await Promise.resolve();
+		scenario.getChild("positionHelperPath").emitLine({
+			type: "sample",
+			timestampMs: 11_170,
+			x: 500,
+			y: 250,
+		});
+		scenario.getChild("cursorHelperPath").emitLine({
+			type: "sample",
+			timestampMs: 11_180,
+			assetId: null,
+			leftButtonDown: true,
+			leftButtonPressed: true,
+			leftButtonReleased: false,
+		});
+		await Promise.resolve();
+		process.emit("SIGUSR2" as NodeJS.Signals, "SIGUSR2" as NodeJS.Signals);
+		expect(await runPromise).toBe(0);
+
+		const readyLines = logs.filter((line) => line.includes("Recording ready."));
+		expect(readyLines).toEqual(["[lensmith] Recording ready. started-at=10180"]);
+
+		const cursorJson = JSON.parse(readFileSync(`${outPath}.cursor.json`, "utf8"));
+		expect(cursorJson.samples).toHaveLength(1);
+		expect(cursorJson.samples[0]).toMatchObject({ timeMs: 1_000, interactionType: "click" });
+
+		const sessionJson = JSON.parse(readFileSync(path.join(dir, "test.session.json"), "utf8"));
+		expect(sessionJson.createdAt).toBe(10_000);
+		expect(sessionJson.firstFrameAt).toBe(10_180);
+	});
+
 	it("BF-19: a window source normalizes cursor samples to the window frame, not the display", async () => {
-		const scenario = buildScenario({ x: 0, y: 30, width: 1600, height: 900 });
+		const scenario = buildScenario({ x: 0, y: 30, width: 1600, height: 900 }, undefined, 0);
 		const runPromise = runRecord(
 			{ source: "window:42", fps: 30, mic: false, systemAudio: false, out: outPath },
 			{
@@ -264,7 +315,7 @@ describe("runRecord", () => {
 	});
 
 	it("CR-LENSMITH-A010-7: a region source normalizes cursor samples to the region", async () => {
-		const scenario = buildScenario();
+		const scenario = buildScenario(undefined, undefined, 0);
 		const runPromise = runRecord(
 			{ source: "region:200,100,400,200", fps: 30, mic: false, systemAudio: false, out: outPath },
 			{

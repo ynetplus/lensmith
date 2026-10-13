@@ -312,6 +312,9 @@ export async function runRecord(
 		stdio: ["pipe", "pipe", "pipe"],
 	}) as ChildWithStdin;
 
+	// BF-28: the first video frame's epoch (the helper's `recording-started.timestampMs`).
+	let firstFrameAt: number | null = null;
+
 	const outcome = await new Promise<"stopped" | "error">((resolve) => {
 		let settled = false;
 		let stopRequested = false;
@@ -327,11 +330,24 @@ export async function runRecord(
 		readNdjson(sckChild.stdout, (event) => {
 			const e = event as Record<string, unknown>;
 			if (e?.event === "ready") {
-				log("[lensmith] Recording ready.");
+				// BF-28: the ready line waits for the first frame so it can carry that frame's epoch.
 				return;
 			}
 			if (e?.event === "recording-started") {
 				recordingStartedAtMs = now();
+				if (typeof e.timestampMs === "number") {
+					firstFrameAt = e.timestampMs;
+					// Prefix `Recording ready.` is matched by consumers (the Director) — keep it byte for byte.
+					log(`[lensmith] Recording ready. started-at=${firstFrameAt}`);
+					const dropped = telemetry.setZero(firstFrameAt);
+					if (dropped > 0) {
+						log(
+							`[lensmith] Cursor telemetry zeroed at the first frame; dropped ${dropped} earlier sample(s).`,
+						);
+					}
+				} else {
+					log("[lensmith] Recording ready.");
+				}
 				log(
 					`[lensmith] Recording started (${e.width}x${e.height} @ ${options.fps}fps). ` +
 						"Press Ctrl+C to stop.",
@@ -414,6 +430,7 @@ export async function runRecord(
 	const sessionData = {
 		screenVideoPath: screenPath,
 		createdAt,
+		firstFrameAt,
 		cursorCaptureMode: "editable-overlay" as const,
 	};
 

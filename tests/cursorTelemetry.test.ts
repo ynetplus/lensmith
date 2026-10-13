@@ -223,4 +223,46 @@ describe("CursorTelemetryRecorder", () => {
 		});
 		expect(recorder.toTelemetryData().samples[0]).toMatchObject({ cx: 0.5, cy: 0.25 });
 	});
+
+	describe("BF-28: setZero moves the zero to the first video frame", () => {
+		const shape = (timestampMs: number, leftButtonPressed = false) => ({
+			timestampMs,
+			assetId: null,
+			leftButtonDown: leftButtonPressed,
+			leftButtonPressed,
+			leftButtonReleased: false,
+		});
+
+		it("a sample 1000 ms after the first frame gets timeMs 1000, not 1180", () => {
+			const recorder = new CursorTelemetryRecorder(10_000, BOUNDS);
+			recorder.recordPosition(500, 250);
+			const dropped = recorder.setZero(10_180);
+			recorder.recordShapeSample(shape(11_180, true));
+			expect(dropped).toBe(0);
+			expect(recorder.toTelemetryData().samples[0]).toMatchObject({
+				timeMs: 1_000,
+				interactionType: "click",
+			});
+		});
+
+		it("re-bases samples taken before setZero and drops those that land before the new zero", () => {
+			const recorder = new CursorTelemetryRecorder(10_000, BOUNDS);
+			recorder.recordPosition(500, 250);
+			recorder.recordShapeSample(shape(10_050));
+			recorder.recordShapeSample(shape(10_150));
+			recorder.recordShapeSample(shape(10_200));
+			recorder.recordShapeSample(shape(10_300));
+			expect(recorder.toTelemetryData().samples.map((s) => s.timeMs)).toEqual([50, 150, 200, 300]);
+
+			expect(recorder.setZero(10_180)).toBe(2);
+			expect(recorder.sampleCount).toBe(2);
+			expect(recorder.toTelemetryData().samples.map((s) => s.timeMs)).toEqual([20, 120]);
+		});
+
+		it("defaults the zero to the constructor's startTimeMs when setZero is never called", () => {
+			const recorder = new CursorTelemetryRecorder(10_000, BOUNDS);
+			recorder.recordShapeSample(shape(11_180));
+			expect(recorder.toTelemetryData().samples[0]?.timeMs).toBe(1_180);
+		});
+	});
 });
