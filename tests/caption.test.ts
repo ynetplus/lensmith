@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	buildCaptionCues,
+	CAPTION_STYLE,
 	type CaptionDeps,
 	escapeForFfmpegSubtitlesFilter,
 	formatSrt,
@@ -241,6 +242,18 @@ describe("formatSrt", () => {
 	});
 });
 
+describe("CAPTION_STYLE", () => {
+	it("is the bar look, never the old outline look", () => {
+		expect(CAPTION_STYLE).toContain("BorderStyle=4");
+		expect(CAPTION_STYLE).not.toMatch(/BorderStyle=1\b/);
+		expect(CAPTION_STYLE).toContain("Shadow=0");
+		expect(CAPTION_STYLE).toContain("FontName=Helvetica Neue");
+		expect(CAPTION_STYLE).toContain("Bold=500");
+		// the glyph stroke is invisible: OutlineColour alpha is FF
+		expect(CAPTION_STYLE).toMatch(/OutlineColour=&HFF[0-9A-F]{6}/);
+	});
+});
+
 describe("escapeForFfmpegSubtitlesFilter", () => {
 	it("escapes colons (macOS/Linux absolute paths are fine, but drive-letter-style or option-separator collisions are not)", () => {
 		expect(escapeForFfmpegSubtitlesFilter("/tmp/a:b.srt")).toBe("/tmp/a\\:b.srt");
@@ -346,6 +359,25 @@ describe("runCaption (orchestration, fake spawnSync)", () => {
 		const srt = readFileSync(srtOut, "utf-8");
 		expect(srt).toContain("hello world this is a test");
 		expect(srt).toMatch(/^\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}/m);
+	});
+
+	it("burn-in passes the shared CAPTION_STYLE to ffmpeg", () => {
+		const base = fakeDeps({});
+		const calls: string[][] = [];
+		const deps: CaptionDeps = {
+			spawnSync: ((cmd: string, args: readonly string[] = [], o?: unknown) => {
+				calls.push([cmd, ...args]);
+				return (
+					base.spawnSync as unknown as (c: string, a: readonly string[], o?: unknown) => unknown
+				)(cmd, args, o);
+			}) as unknown as CaptionDeps["spawnSync"],
+		};
+		expect(runCaption({ in: inputVideo, out: tmpOut("out-style.mp4"), burnIn: true }, deps)).toBe(
+			0,
+		);
+		const burn = calls.find((c) => c.some((a) => a.startsWith("subtitles=")));
+		const filter = burn?.find((a) => a.startsWith("subtitles=")) ?? "";
+		expect(filter).toContain(`force_style='${CAPTION_STYLE}'`);
 	});
 
 	it("--no-burn-in: --out is an unchanged copy, --srt-out is still written", () => {

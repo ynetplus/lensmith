@@ -178,6 +178,24 @@ export function formatSrt(cues: CaptionCue[]): string {
 		.join("\n");
 }
 
+/**
+ * The one burned-caption look, shared by `caption` and `voiceover`: white
+ * medium-weight Helvetica Neue on a translucent dark bar (rgba 14,16,22 at
+ * 74 %), no outline, no shadow, centred in the bottom safe zone. libass sizes
+ * an SRT in a 384x288 script space scaled to the video height, so the same
+ * constant serves every frame size (at 1080p one unit is 3.75 px).
+ * `BorderStyle=4` draws one box behind the event with `Outline` as its padding;
+ * libass still strokes the glyph outline in that mode, so `OutlineColour` is
+ * fully transparent (alpha FF) and `MarginV` includes the padding (bar bottom
+ * 64 px above the frame bottom at 1080p).
+ * libass fits a font's ascent+descent to `FontSize`, so 18 units give a
+ * ~40 px cap height at 1080p.
+ * `Bold=500` is a numeric weight to libass (any value above 1 is), which is
+ * how it selects the Medium face; the font name alone resolves Regular.
+ */
+export const CAPTION_STYLE =
+	"FontName=Helvetica Neue,FontSize=18,Bold=500,PrimaryColour=&H00FFFFFF,BackColour=&H4216100E,OutlineColour=&HFF16100E,BorderStyle=4,Outline=4,Shadow=0,Alignment=2,MarginV=21,MarginL=54,MarginR=54,WrapStyle=0";
+
 /** Escapes a filesystem path for safe use inside ffmpeg's `subtitles=` filter argument. */
 export function escapeForFfmpegSubtitlesFilter(filePath: string): string {
 	// ffmpeg's filtergraph parser treats `:`, `\`, and `'` specially inside a
@@ -321,7 +339,7 @@ export function runCaption(opts: CaptionOptions, deps: CaptionDeps = realDeps): 
 			const srtForBurn = opts.srtOut ?? path.join(tmpDir, "captions.srt");
 			if (!opts.srtOut) writeFileSync(srtForBurn, srt, "utf-8");
 
-			const filter = `subtitles='${escapeForFfmpegSubtitlesFilter(srtForBurn)}':force_style='FontName=Arial,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=40'`;
+			const filter = `subtitles='${escapeForFfmpegSubtitlesFilter(srtForBurn)}':force_style='${CAPTION_STYLE}'`;
 			runOrThrow(
 				deps,
 				"ffmpeg",

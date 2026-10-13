@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
-import { type CaptionCue, escapeForFfmpegSubtitlesFilter, formatSrt } from "./caption.js";
+import {
+	CAPTION_STYLE,
+	type CaptionCue,
+	escapeForFfmpegSubtitlesFilter,
+	formatSrt,
+} from "./caption.js";
 import { NarrateError, type Timings, validateTimings } from "./narrate.js";
 
 /**
@@ -85,11 +90,9 @@ export function buildFfmpegArgs(opts: {
 	args.push("-filter_complex", buildAudioFilter(opts.startsMs, opts.filmSeconds));
 	args.push("-map", "0:v:0", "-map", "[aout]");
 	if (opts.burnSrt) {
-		const style =
-			"FontName=Arial,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=40";
 		args.push(
 			"-vf",
-			`subtitles='${escapeForFfmpegSubtitlesFilter(opts.burnSrt)}':force_style='${style}'`,
+			`subtitles='${escapeForFfmpegSubtitlesFilter(opts.burnSrt)}':force_style='${CAPTION_STYLE}'`,
 			"-c:v",
 			"libx264",
 			"-crf",
