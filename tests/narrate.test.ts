@@ -1,4 +1,4 @@
-import type { SpawnSyncReturns } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +18,7 @@ import {
 // uv, no Kokoro model and no network. A fake `spawnSync` plays the helper's contract —
 // read the job file, write each audio file and the result JSON with word timings — so the
 // Node side (mark parsing, mark times, cues, timings.json, cache) is tested for real.
+// The speech-bounds detector is plain Python (standard library for WAV), so it runs for real.
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -42,12 +43,14 @@ function fakeWords(text: string): Word[] {
 interface Fake {
 	deps: NarrateDeps;
 	helperRuns: { id: string; text: string }[][];
+	measureRuns: string[][];
 	logs: string[];
 	errors: string[];
 }
 
-function fakeDeps(opts: { uv?: boolean; helperStatus?: number } = {}): Fake {
+function fakeDeps(opts: { uv?: boolean; helperStatus?: number; noBounds?: boolean } = {}): Fake {
 	const helperRuns: { id: string; text: string }[][] = [];
+	const measureRuns: string[][] = [];
 	const logs: string[] = [];
 	const errors: string[] = [];
 	const ok = (status: number) =>
@@ -63,15 +66,27 @@ function fakeDeps(opts: { uv?: boolean; helperStatus?: number } = {}): Fake {
 		if (cmd === "uv" && args[0] === "run") {
 			const [jobPath, resultPath] = args.slice(-2) as [string, string];
 			const job = JSON.parse(readFileSync(jobPath, "utf-8")) as {
+				measure?: boolean;
 				lines: { id: string; text: string; file: string }[];
 			};
+			if (job.measure) {
+				measureRuns.push(job.lines.map((l) => l.id));
+				const lines = Object.fromEntries(
+					job.lines.map((l) => [l.id, { speechStartMs: 120, speechEndMs: 900 }]),
+				);
+				writeFileSync(resultPath, JSON.stringify({ lines }));
+				return ok(0);
+			}
 			helperRuns.push(job.lines.map((l) => ({ id: l.id, text: l.text })));
 			if (opts.helperStatus) return ok(opts.helperStatus);
-			const lines: Record<string, { durationMs: number; words: Word[] }> = {};
+			const lines: Record<string, object> = {};
 			for (const l of job.lines) {
 				writeFileSync(l.file, "RIFF-fake-audio");
 				const words = fakeWords(l.text);
-				lines[l.id] = { durationMs: 100 + words.length * 300 + 200, words };
+				const durationMs = 100 + words.length * 300 + 200;
+				lines[l.id] = opts.noBounds
+					? { durationMs, words }
+					: { durationMs, speechStartMs: 100, speechEndMs: durationMs - 200, words };
 			}
 			writeFileSync(resultPath, JSON.stringify({ lines }));
 			return ok(0);
@@ -86,6 +101,7 @@ function fakeDeps(opts: { uv?: boolean; helperStatus?: number } = {}): Fake {
 			error: (s) => errors.push(s),
 		},
 		helperRuns,
+		measureRuns,
 		logs,
 		errors,
 	};
@@ -159,6 +175,26 @@ describe("validateTimings", () => {
 	it("accepts the documented shape", () => {
 		expect(() => validateTimings(good)).not.toThrow();
 	});
+	it("accepts speech bounds inside the line, and lines without them (older caches)", () => {
+		const withBounds = structuredClone(good);
+		Object.assign(withBounds.lines.l1 as object, { speechStartMs: 150, speechEndMs: 900 });
+		expect(() => validateTimings(withBounds)).not.toThrow();
+		const edge = structuredClone(good);
+		Object.assign(edge.lines.l1 as object, { speechStartMs: 0, speechEndMs: 1000 });
+		expect(() => validateTimings(edge)).not.toThrow();
+	});
+	it.each([
+		["start after end", { speechStartMs: 600, speechEndMs: 500 }],
+		["start equal to end", { speechStartMs: 500, speechEndMs: 500 }],
+		["end past durationMs", { speechStartMs: 100, speechEndMs: 1001 }],
+		["negative start", { speechStartMs: -1, speechEndMs: 500 }],
+		["non-integer", { speechStartMs: 100.5, speechEndMs: 500 }],
+		["only one of the two", { speechStartMs: 100 }],
+	])("rejects speech bounds: %s", (_name, b) => {
+		const bad = structuredClone(good);
+		Object.assign(bad.lines.l1 as object, b);
+		expect(() => validateTimings(bad)).toThrow(/speechStartMs\/speechEndMs/);
+	});
 	it("rejects a mark outside its line", () => {
 		const bad = structuredClone(good);
 		(bad.lines.l1 as { marks: Record<string, number> }).marks.a = 1500;
@@ -191,8 +227,18 @@ describe("runNarrate (helper stubbed)", () => {
 		expect(l1?.words[0]).toEqual({ text: "Open", startMs: 100, endMs: 350 });
 		expect(l2?.cues.map((c) => c.text)).toEqual(["Then go back to all companies.", "Pick one."]);
 		for (const line of Object.values(t.lines)) {
-			expect(Object.keys(line).sort()).toEqual(["cues", "durationMs", "file", "marks", "words"]);
+			expect(Object.keys(line).sort()).toEqual([
+				"cues",
+				"durationMs",
+				"file",
+				"marks",
+				"speechEndMs",
+				"speechStartMs",
+				"words",
+			]);
 			expect(line.durationMs).toBeGreaterThan(0);
+			expect(line.speechStartMs).toBe(100);
+			expect(line.speechEndMs).toBe(line.durationMs - 200);
 		}
 		expect(readFileSync(path.join(out, "l2.wav"), "utf-8")).toBe("RIFF-fake-audio");
 		expect(fake.logs[0]).toMatch(/2 synthesized, 0 cached; kokoro am_michael/);
@@ -274,5 +320,70 @@ describe("runNarrate (helper stubbed)", () => {
 		expect(fake.logs[0]).toMatch(/edge en-US-AndrewNeural/);
 		const t = JSON.parse(readFileSync(path.join(out, "timings.json"), "utf-8")) as Timings;
 		expect(t.lines.l1?.file).toBe("l1.mp3");
+	});
+});
+
+describe("speech bounds", () => {
+	it("re-measures cached lines without bounds instead of re-synthesizing them", () => {
+		const dir = tmp();
+		const out = path.join(dir, "audio");
+		expect(
+			runNarrate({ script: writeScript(dir, TWO_LINES), out }, fakeDeps({ noBounds: true }).deps),
+		).toBe(0);
+		const before = JSON.parse(readFileSync(path.join(out, "timings.json"), "utf-8")) as Timings;
+		expect(before.lines.l1?.speechStartMs).toBeUndefined();
+
+		const again = fakeDeps();
+		expect(runNarrate({ script: writeScript(dir, TWO_LINES), out }, again.deps)).toBe(0);
+		expect(again.helperRuns).toEqual([]); // nothing re-synthesized
+		expect(again.measureRuns).toEqual([["l1", "l2"]]);
+		const t = JSON.parse(readFileSync(path.join(out, "timings.json"), "utf-8")) as Timings;
+		expect(t.lines.l1).toMatchObject({ speechStartMs: 120, speechEndMs: 900 });
+		expect(t.lines.l1?.durationMs).toBe(before.lines.l1?.durationMs);
+		expect(readFileSync(path.join(out, "l1.wav"), "utf-8")).toBe("RIFF-fake-audio");
+
+		const third = fakeDeps(); // bounds now cached: no helper run at all
+		expect(runNarrate({ script: writeScript(dir, TWO_LINES), out }, third.deps)).toBe(0);
+		expect(third.helperRuns).toEqual([]);
+		expect(third.measureRuns).toEqual([]);
+	});
+
+	it("detects the voice inside a clip's silence (400 ms + tone + 650 ms, 24 kHz WAV)", () => {
+		const rate = 24000;
+		const lead = (0.4 * rate) | 0;
+		const tone = (1.2 * rate) | 0;
+		const tail = (0.65 * rate) | 0;
+		const n = lead + tone + tail;
+		const wav = Buffer.alloc(44 + n * 2);
+		wav.write("RIFF", 0);
+		wav.writeUInt32LE(36 + n * 2, 4);
+		wav.write("WAVEfmt ", 8);
+		wav.writeUInt32LE(16, 16);
+		wav.writeUInt16LE(1, 20); // PCM
+		wav.writeUInt16LE(1, 22); // mono
+		wav.writeUInt32LE(rate, 24);
+		wav.writeUInt32LE(rate * 2, 28);
+		wav.writeUInt16LE(2, 32);
+		wav.writeUInt16LE(16, 34);
+		wav.write("data", 36);
+		wav.writeUInt32LE(n * 2, 40);
+		for (let i = 0; i < tone; i++) {
+			const v = Math.round(0.5 * 32767 * Math.sin((2 * Math.PI * 220 * i) / rate));
+			wav.writeInt16LE(v, 44 + (lead + i) * 2);
+		}
+		// A little noise floor below -40 dBFS in the silences must not count as speech.
+		for (let i = 0; i < lead; i += 7) wav.writeInt16LE(100, 44 + i * 2);
+		const file = path.join(tmp(), "line.wav");
+		writeFileSync(file, wav);
+
+		const helper = path.resolve(import.meta.dirname, "../scripts/narrate.py");
+		const r = spawnSync("python3", [helper, "--bounds", file], { encoding: "utf-8" });
+		expect(r.stderr).toBe("");
+		expect(r.status).toBe(0);
+		const b = JSON.parse(r.stdout) as { speechStartMs: number; speechEndMs: number };
+		const durationMs = Math.round((n / rate) * 1000);
+		expect(Math.abs(b.speechStartMs - 400)).toBeLessThanOrEqual(15);
+		expect(Math.abs(b.speechEndMs - (durationMs - 650))).toBeLessThanOrEqual(15);
+		expect(b.speechStartMs).toBeLessThan(b.speechEndMs);
 	});
 });
